@@ -32,7 +32,8 @@ import type {
   RoutingLogEntry,
   RoutingLogger,
 } from "@/types/router";
-import { callJev, readOwn, type JevChoiceAnswer, type JevRequest, type JevTransport } from "@/lib/jevClient";
+import { readOwn } from "@/lib/guards";
+import { callJev, type JevChoiceAnswer, type JevRequest, type JevTransport } from "@/lib/jevClient";
 
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.75;
 export const ROUTER_QUESTION_ID = "router.select_option";
@@ -113,13 +114,20 @@ export function assertValidRequest(request: RouteRequest): void {
 // Context + question construction
 // ---------------------------------------------------------------------------
 
+/** Collapse line breaks so a field can't start a new section of the state text. */
+function singleLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+}
+
 /**
  * The "state" text Jev evaluates. The request is JSON-encoded on its line, so
- * quotes, backslashes and newlines inside the user's text are escaped and the
- * line can never be confused with the sections that follow it.
+ * quotes, backslashes and newlines inside the user's text are escaped, and
+ * each option is forced onto one line, so neither can be confused with the
+ * sections that follow. The conversation context comes last, unencoded, so
+ * Jev reads it as written.
  */
 export function buildRouterContext(request: RouteRequest): string {
-  const optionsDescription = request.options.map((o) => `- ${o.id}: ${o.label} — ${o.description}`).join("\n");
+  const optionsDescription = request.options.map((o) => `- ${singleLine(o.id)}: ${singleLine(o.label)} — ${singleLine(o.description)}`).join("\n");
   const context = request.context?.trim();
   return (
     `Request: ${JSON.stringify(request.userInput)}\n\nOptions:\n${optionsDescription}` +

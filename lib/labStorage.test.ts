@@ -1,28 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { clearLabState, historyToJson, isFallbackAction, LAB_STORAGE_KEY, LAB_STORAGE_VERSION, loadLabState, MAX_HISTORY, parseLabState, saveLabState } from "@/lib/labStorage";
-import { modelRouterOptions, toolRouterOptions } from "@/lib/routerConfigs";
+import { createRouter, ROUTER_QUESTION_ID } from "@/lib/jevRouter";
+import { modelRouterOptions, toolRouterConfig, toolRouterOptions } from "@/lib/routerConfigs";
+import { installFakeStorage, uninstallFakeStorage } from "@/lib/testing/fakeStorage";
 import type { RoutingLogEntry } from "@/types/router";
 
-/** Minimal localStorage stand-in so the helpers can be exercised outside a browser. */
-function installFakeStorage(opts: { throwing?: boolean } = {}) {
-  const store = new Map<string, string>();
-  const boom = () => {
-    throw new Error("QuotaExceededError");
-  };
-  const fake = opts.throwing
-    ? { getItem: boom, setItem: boom, removeItem: boom }
-    : {
-        getItem: (k: string) => store.get(k) ?? null,
-        setItem: (k: string, v: string) => void store.set(k, v),
-        removeItem: (k: string) => void store.delete(k),
-      };
-  (globalThis as unknown as { window: unknown }).window = { localStorage: fake };
-  return store;
-}
-
-afterEach(() => {
-  delete (globalThis as unknown as { window?: unknown }).window;
-});
+afterEach(uninstallFakeStorage);
 
 const entry: RoutingLogEntry = {
   id: "abc",
@@ -58,6 +41,15 @@ describe("parseLabState", () => {
     expect(parseLabState({ version: 99 })).toBeNull();
     expect(parseLabState("nope")).toBeNull();
     expect(parseLabState(null)).toBeNull();
+  });
+
+  it("round-trips a log entry the real router produced", async () => {
+    const transport = async () => [{ id: ROUTER_QUESTION_ID, type: "choice" as const, value: "calculator", confidence: 0.4, needsReview: false }];
+    const router = createRouter({ ...toolRouterConfig, logger: { log: () => {} } }, transport, "mock");
+    const { logEntry } = await router.route({ userInput: "2+2", context: "earlier", options: toolRouterOptions });
+    const parsed = parseLabState(JSON.parse(JSON.stringify({ version: LAB_STORAGE_VERSION, history: [logEntry] })));
+    expect(parsed?.history).toEqual([logEntry]);
+    expect(parsed?.history?.[0].fallbackAction.kind).toBe("needs_clarification");
   });
 
   it("drops entries whose fallbackAction is not a complete variant of the union", () => {

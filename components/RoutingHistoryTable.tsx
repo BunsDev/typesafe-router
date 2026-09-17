@@ -53,16 +53,10 @@ export default function RoutingHistoryTable({ entries, onClear, onExport, onReca
                 <td className="tnum whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{formatTime(e.timestamp)}</td>
                 <td className="px-3 py-2 text-xs text-ink-2">{e.mode}</td>
                 <td className="max-w-[20rem] px-3 py-2">
-                  {/* The row's click is a mouse convenience; this button is the focusable, keyboard-operable control. */}
-                  <button
-                    type="button"
-                    className="block w-full truncate rounded-sm text-left text-ink-2 underline-offset-2 hover:underline"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onRecall(e);
-                    }}
-                    aria-label={`Load this request: ${e.userInput}`}
-                  >
+                  {/* The button makes the row focusable and keyboard-operable. Enter/Space on it dispatches a
+                      bubbling click, so the row's single onClick handles mouse and keyboard alike. */}
+                  <button type="button" className="block w-full truncate rounded-sm text-left text-ink-2 underline-offset-2 hover:underline">
+                    <span className="sr-only">Load this request: </span>
                     {e.userInput}
                   </button>
                 </td>

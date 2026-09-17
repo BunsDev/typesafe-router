@@ -61,6 +61,11 @@ describe("normalizeAnswers", () => {
     expect(answer.needsReview).toBe(true);
   });
 
+  it("accepts a null or differently-cased choice type", () => {
+    expect(normalizeAnswers(request, { answers: { q: { type: null, choice: "a", confidence: 0.9 } } })[0].needsReview).toBe(false);
+    expect(normalizeAnswers(request, { answers: { q: { type: "Choice", choice: "a", confidence: 0.9 } } })[0].needsReview).toBe(false);
+  });
+
   it("keeps a valid pick with no confidence information, at zero confidence", () => {
     const [answer] = normalizeAnswers(request, { answers: { q: { choice: "a" } } });
     expect(answer).toEqual({ id: "q", type: "choice", value: "a", optionProbabilities: undefined, confidence: 0, needsReview: false });

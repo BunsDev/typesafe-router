@@ -45,15 +45,15 @@ If you deploy this publicly, note that a browser key is sent to *your* server on
 
 ### Limits on a public deployment
 
-`/api/route` is unauthenticated, so it bounds what one request can make the server do (`lib/limits.ts`): the input and the context are capped at 20,000 characters each, an option list at 32 entries, and each option's id, label and description at 64, 120 and 1,000 characters. A body over 256 KB is refused with 413 before it is parsed. The lab applies the same caps as `maxLength` on its fields.
+`/api/route` is unauthenticated, so it bounds what one request can make the server do (`lib/limits.ts`): the input and the context are capped at 20,000 characters each, an option list at 32 entries, and each option's id, label and description at 64, 120 and 1,000 characters. A body over 256 KB is refused with 413 before it is parsed. The lab applies the same caps as `maxLength` on its fields and stops the editor at 32 options. Option ids, labels and descriptions are collapsed onto one line in the text sent to Jev, so a line break inside one cannot open a fake section.
 
-Calls that would spend the **server's** key are also rate limited per caller IP: `ROUTE_RATE_LIMIT_PER_MINUTE` (default 60, `0` disables) returns 429 with code `rate_limited` once exceeded. Calls that carry a browser-saved key are not counted; they spend that user's credits. The counter is per process, so on a serverless host it slows casual abuse rather than enforcing a global quota. Put a gateway limiter or an auth wall in front if the deployment is meant for strangers.
+Calls that would spend the **server's** key are also rate limited per caller IP: `ROUTE_RATE_LIMIT_PER_MINUTE` (default 60, `0` disables) returns 429 with code `rate_limited` once exceeded. Calls that carry a browser-saved key are not counted; they spend that user's credits. The counter is per process and tracks at most 10,000 callers (idle ones are dropped first, then the least recently seen), so on a serverless host it slows casual abuse rather than enforcing a global quota. Put a gateway limiter or an auth wall in front if the deployment is meant for strangers.
 
 ### What the lab remembers
 
 Edited options, the threshold, and the routing history are saved in your browser (`localStorage`, key `jev-router:lab`) so a refresh doesn't lose them. **Reset everything** in the footer removes the stored copy; nothing is written back until you change something again. **Export JSON** in the history panel downloads the full log, one `RoutingLogEntry` per decision, for review or tuning. The API key is stored separately and is never part of this blob. Whatever is read back is validated field by field, and a malformed entry is dropped rather than rendered.
 
-Selecting a request in the history table (click the row, or Tab to it and press Enter) loads its mode, input **and** conversation context back into the request panel, so re-running it reproduces the logged decision. Clearing the history or resetting the lab also discards any routing call still in flight, so a slow response can't reappear afterwards.
+Selecting a request in the history table (click the row, or Tab to it and press Enter) loads its mode, input, conversation context and threshold back into the request panel. The options are whatever the editor holds at that moment (only their ids are logged), so a re-run is a fresh decision, not a replay. Resetting the lab discards any routing call still in flight; clearing the history while a call is running keeps that decision on screen but doesn't re-add it to the log.
 
 The **Conversation context** field under the input is the `context` half of `RouteRequest`: recent turns that should influence the pick. Try "Is it free?" on its own and then with a prior turn about Thursday afternoon.
 
@@ -150,6 +150,7 @@ Every call produces one `RoutingLogEntry` with the input, the options considered
 lib/
   apiKeyStorage.ts      browser-only key storage; the only reader hands the key straight to fetch
   labStorage.ts         browser-only persistence of options, threshold and history, validated on load; JSON export
+  guards.ts             isFiniteNumber and readOwn (prototype-safe reads of maps keyed by option id)
   limits.ts             size caps shared by the API route (enforced) and the UI (maxLength)
   rateLimit.ts          in-memory sliding-window limiter for calls that spend the server key
   jevClient.ts          low-level Jev API wrapper (wire format, errors, normalisation)
@@ -157,6 +158,7 @@ lib/
   routerConfigs.ts      modelRouterOptions, toolRouterOptions, fallback policies
   mockRouter.ts         demo-mode keyword simulator, same JevTransport signature as callJev
   index.ts              public re-exports
+  testing/fakeStorage.ts  localStorage stand-in for the storage tests
   *.test.ts             vitest suites
 types/
   router.ts             RouteOption, RouteRequest, RouteDecision, FallbackPolicy, RoutingLogEntry, …

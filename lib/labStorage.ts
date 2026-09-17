@@ -10,7 +10,8 @@
  * be dropped rather than crash the lab while rendering.
  */
 
-import type { FallbackAction, FallbackReason, RouteOption, RouterMode, RoutingLogEntry } from "@/types/router";
+import { isFiniteNumber } from "@/lib/guards";
+import type { FallbackAction, FallbackReason, RouteOption, RouterMode, RouteSource, RoutingLogEntry } from "@/types/router";
 
 export const LAB_STORAGE_KEY = "jev-router:lab";
 export const LAB_STORAGE_VERSION = 1;
@@ -25,10 +26,6 @@ export type LabState = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -48,22 +45,32 @@ function isScoreMap(value: unknown): value is Record<string, number> {
   return isRecord(value) && Object.values(value).every(isFiniteNumber);
 }
 
+// These lookups are typed against the unions in types/router.ts, so adding a
+// member there fails to compile here instead of silently dropping history rows.
+const SOURCES: Record<RouteSource, true> = { jev: true, mock: true };
+const REASONS: Record<FallbackReason, true> = { low_confidence: true, invalid_option: true };
+const ACTION_KINDS: Record<FallbackAction["kind"], true> = { none: true, safe_default: true, needs_clarification: true };
+
+function isSource(value: unknown): value is RouteSource {
+  return typeof value === "string" && Object.hasOwn(SOURCES, value);
+}
+
 function isReason(value: unknown): value is FallbackReason {
-  return value === "low_confidence" || value === "invalid_option";
+  return typeof value === "string" && Object.hasOwn(REASONS, value);
 }
 
 /** The discriminated union has to be checked per variant; `{}` is not a FallbackAction. */
 export function isFallbackAction(value: unknown): value is FallbackAction {
   if (!isRecord(value)) return false;
-  switch (value.kind) {
+  const kind = value.kind;
+  if (typeof kind !== "string" || !Object.hasOwn(ACTION_KINDS, kind)) return false;
+  switch (kind as FallbackAction["kind"]) {
     case "none":
       return true;
     case "safe_default":
       return typeof value.optionId === "string" && isReason(value.reason);
     case "needs_clarification":
       return typeof value.prompt === "string" && isReason(value.reason);
-    default:
-      return false;
   }
 }
 
@@ -83,7 +90,7 @@ export function isLogEntry(value: unknown): value is RoutingLogEntry {
     isScoreMap(value.allOptionScores) &&
     typeof value.fallbackUsed === "boolean" &&
     isFallbackAction(value.fallbackAction) &&
-    (value.source === "jev" || value.source === "mock") &&
+    isSource(value.source) &&
     isFiniteNumber(value.durationMs)
   );
 }

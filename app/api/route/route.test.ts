@@ -18,14 +18,10 @@ function stubJev() {
   );
 }
 
-const savedEnv = { key: process.env.TYPESAFE_API_KEY, limit: process.env.ROUTE_RATE_LIMIT_PER_MINUTE };
 afterEach(() => {
-  process.env.TYPESAFE_API_KEY = savedEnv.key;
-  process.env.ROUTE_RATE_LIMIT_PER_MINUTE = savedEnv.limit;
-  if (savedEnv.key === undefined) delete process.env.TYPESAFE_API_KEY;
-  if (savedEnv.limit === undefined) delete process.env.ROUTE_RATE_LIMIT_PER_MINUTE;
   serverKeyLimiter.reset();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("redact", () => {
@@ -61,7 +57,7 @@ describe("validateBody", () => {
 
 describe("POST /api/route", () => {
   it("routes through the simulator when no key is available", async () => {
-    delete process.env.TYPESAFE_API_KEY;
+    vi.stubEnv("TYPESAFE_API_KEY", undefined);
     const response = await post(good);
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -70,7 +66,7 @@ describe("POST /api/route", () => {
   });
 
   it("refuses oversized bodies before parsing them", async () => {
-    delete process.env.TYPESAFE_API_KEY;
+    vi.stubEnv("TYPESAFE_API_KEY", undefined);
     const declared = await post(good, { "content-length": String(MAX_BODY_BYTES + 1) });
     expect(declared.status).toBe(413);
     const actual = await post({ ...good, context: "x".repeat(MAX_BODY_BYTES) });
@@ -79,8 +75,8 @@ describe("POST /api/route", () => {
   });
 
   it("rate limits callers that spend the server's key, but not callers with their own", async () => {
-    process.env.TYPESAFE_API_KEY = "sk-server-key-1234567890";
-    process.env.ROUTE_RATE_LIMIT_PER_MINUTE = "1";
+    vi.stubEnv("TYPESAFE_API_KEY", "sk-server-key-1234567890");
+    vi.stubEnv("ROUTE_RATE_LIMIT_PER_MINUTE", "1");
     const fetchMock = stubJev();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -104,8 +100,8 @@ describe("POST /api/route", () => {
   });
 
   it("never echoes the key in an error", async () => {
-    process.env.TYPESAFE_API_KEY = "sk-server-key-1234567890";
-    delete process.env.ROUTE_RATE_LIMIT_PER_MINUTE;
+    vi.stubEnv("TYPESAFE_API_KEY", "sk-server-key-1234567890");
+    vi.stubEnv("ROUTE_RATE_LIMIT_PER_MINUTE", undefined);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("bad key sk-server-key-1234567890", { status: 401 })));
     const response = await post(good);
     expect(response.status).toBe(401);

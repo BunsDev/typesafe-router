@@ -22,6 +22,10 @@
  *   { "type": "choice", "choice": "web_search", "probabilities": {...}, "confidence": 0.91 }
  */
 
+import { isFiniteNumber, readOwn } from "@/lib/guards";
+
+export { readOwn } from "@/lib/guards";
+
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const DEFAULT_JEV_MODEL = "jev-latest";
 const TIMEOUT_MS = 20_000;
@@ -96,28 +100,14 @@ export class JevApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Option ids as object keys
-// ---------------------------------------------------------------------------
-
-/**
- * Option ids become object keys in the wire format and in score maps, and an
- * id such as `constructor` or `__proto__` would otherwise be read from (or, for
- * `__proto__`, silently swallowed by) `Object.prototype`. Every read of a map
- * keyed by option id goes through this, and every such map is built with
- * `Object.fromEntries`, which defines own properties instead of assigning.
- */
-export function readOwn<T>(map: Record<string, T> | undefined | null, key: string): T | undefined {
-  return map && typeof map === "object" && Object.hasOwn(map, key) ? map[key] : undefined;
-}
-
-// ---------------------------------------------------------------------------
 // Wire conversion
 // ---------------------------------------------------------------------------
 
 type WireChoiceQuestion = { type: "choice"; instructions: string; criteria: Record<string, string> };
 
 type WireAnswer = {
-  type?: string;
+  /** Expected to be "choice" when present; compared case-insensitively, and an absent or null type is accepted. */
+  type?: unknown;
   choice?: string;
   probabilities?: Record<string, number>;
   confidence?: number;
@@ -141,10 +131,6 @@ export function toWireRequest(
   return { state: request.context, model, questions };
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -163,7 +149,8 @@ export function normalizeAnswers(request: JevRequest, body: WireResponse): JevCh
     const raw = readOwn(answers, question.id);
     const probabilities = sanitizeProbabilities(raw?.probabilities, question.options);
     const choice = raw?.choice;
-    const isChoiceAnswer = raw?.type === undefined || raw.type === "choice";
+    const rawType = raw?.type;
+    const isChoiceAnswer = rawType == null || (typeof rawType === "string" && rawType.toLowerCase() === "choice");
     const validChoice = isChoiceAnswer && typeof choice === "string" && question.options.includes(choice);
 
     if (!validChoice) {

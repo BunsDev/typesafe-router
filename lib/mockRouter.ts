@@ -12,7 +12,8 @@
  * runs exactly the same code path in demo mode as it does against the live API.
  */
 
-import { readOwn, type JevChoiceAnswer, type JevRequest, type JevTransport } from "@/lib/jevClient";
+import { readOwn } from "@/lib/guards";
+import type { JevChoiceAnswer, JevRequest, JevTransport } from "@/lib/jevClient";
 
 /**
  * Hand-written keyword hints for the option ids shipped in `routerConfigs.ts`.
@@ -123,27 +124,16 @@ export function createMockTransport(options: MockOptions = {}): JevTransport {
 
     return request.questions.map((question) => {
       const raw = question.options.map((id) => scoreOption(id, readOwn(question.optionDescriptions, id), requestText, requestTokens, conversation));
-      const probs = softmax(raw, temperature);
-
-      let winner = question.options[0];
-      let winnerP = -1;
-      const optionProbabilities: Record<string, number> = Object.fromEntries(
-        question.options.map((id, i) => {
-          const p = Math.round(probs[i] * 1000) / 1000;
-          if (p > winnerP) {
-            winnerP = p;
-            winner = id;
-          }
-          return [id, p];
-        }),
-      );
+      const rounded = softmax(raw, temperature).map((p) => Math.round(p * 1000) / 1000);
+      const winnerIndex = rounded.indexOf(Math.max(...rounded)); // first of any tie, like a stable argmax
+      const optionProbabilities: Record<string, number> = Object.fromEntries(question.options.map((id, i) => [id, rounded[i]]));
 
       return {
         id: question.id,
         type: "choice",
-        value: winner,
+        value: question.options[winnerIndex],
         optionProbabilities,
-        confidence: winnerP,
+        confidence: rounded[winnerIndex],
         needsReview: false,
       };
     });

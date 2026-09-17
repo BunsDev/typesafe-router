@@ -11,7 +11,7 @@ import ThresholdSlider from "@/components/ThresholdSlider";
 import { apiKeyHeaders } from "@/lib/apiKeyStorage";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/jevRouter";
 import { clearLabState, historyToJson, loadLabState, MAX_HISTORY, saveLabState } from "@/lib/labStorage";
-import { MAX_CONTEXT_CHARS, MAX_INPUT_CHARS } from "@/lib/limits";
+import { MAX_CONTEXT_CHARS, MAX_INPUT_CHARS, MAX_OPTIONS } from "@/lib/limits";
 import { defaultOptions, requiredOptionId } from "@/lib/routerConfigs";
 import type { RouteApiError, RouteApiRequest, RouteApiResponse, RouteOption, RouterMode, RoutingLogEntry } from "@/types/router";
 
@@ -74,9 +74,10 @@ export default function RouterLab() {
   const [run, setRun] = useState<RunState | null>(null);
   const [history, setHistory] = useState<RoutingLogEntry[]>(restored?.history ?? []);
   const runCounter = useRef(0);
-  /** Bumped on every run, clear and reset. A response whose sequence number is stale is dropped. */
-  const requestSeq = useRef(0);
+  /** The request whose result is still wanted. A response from any other controller is dropped. */
   const inFlight = useRef<AbortController | null>(null);
+  /** Bumped when the history is cleared, so a run that started earlier doesn't re-add its log line. */
+  const historyEpoch = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const options = optionsByMode[mode];
@@ -85,7 +86,8 @@ export default function RouterLab() {
   const ids = options.map((o) => o.id);
   const hasDuplicateIds = new Set(ids).size !== ids.length;
   const hasEmptyId = ids.some((id) => id.trim().length === 0);
-  const canRun = !loading && input.trim().length > 0 && options.length >= 2 && hasRequired && !hasDuplicateIds && !hasEmptyId;
+  const tooManyOptions = options.length > MAX_OPTIONS;
+  const canRun = !loading && input.trim().length > 0 && options.length >= 2 && !tooManyOptions && hasRequired && !hasDuplicateIds && !hasEmptyId;
 
   useEffect(() => {
     let cancelled = false;
@@ -113,22 +115,22 @@ export default function RouterLab() {
 
   const setOptions = useCallback((next: RouteOption[]) => setOptionsByMode((prev) => ({ ...prev, [mode]: next })), [mode]);
 
-  /** Forget any in-flight request so a slow response can't land after a clear or reset and undo it. */
+  /** Forget any in-flight request so a slow response can't land after a reset and undo it. */
   function discardInFlight() {
-    requestSeq.current += 1;
     inFlight.current?.abort();
     inFlight.current = null;
     setLoading(false);
   }
 
+  /** A run still in progress keeps its decision, but won't re-add itself to the cleared log. */
   function clearHistory() {
-    discardInFlight();
+    historyEpoch.current += 1;
     setHistory([]);
   }
 
   function resetEverything() {
     discardInFlight();
-    clearLabState();
+    // The persistence effect removes the stored blob once state is back at the defaults.
     setOptionsByMode(defaultOptionsByMode());
     setThreshold(DEFAULT_CONFIDENCE_THRESHOLD);
     setHistory([]);
@@ -153,12 +155,16 @@ export default function RouterLab() {
     if (!input.trim() || SAMPLE_INPUTS[mode].includes(input)) setInput(SAMPLE_INPUTS[next][0]);
   }
 
-  /** Load a logged decision's request back into the panel: mode, input AND context, so re-running it reproduces it. */
+  /**
+   * Load a logged decision's request back into the panel: mode, input, context and threshold.
+   * Options are whatever the editor holds now (only their ids were logged), so a re-run is a fresh decision.
+   */
   function recall(entry: RoutingLogEntry) {
     setMode(entry.mode);
     setInput(entry.userInput);
     setContext(entry.context ?? "");
     if (entry.context) setShowContext(true);
+    setThreshold(entry.confidenceThreshold);
     setError(null);
     textareaRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
     textareaRef.current?.focus();
@@ -172,12 +178,11 @@ export default function RouterLab() {
     const snapshot = { mode, userInput: input, context: trimmedContext, options: options.map((o) => ({ ...o })), threshold };
     const body: RouteApiRequest = { mode, userInput: input, context: trimmedContext, options: snapshot.options, confidenceThreshold: threshold };
 
-    requestSeq.current += 1;
-    const seq = requestSeq.current;
     const controller = new AbortController();
     inFlight.current?.abort();
     inFlight.current = controller;
-    const isCurrent = () => seq === requestSeq.current;
+    const epoch = historyEpoch.current;
+    const isCurrent = () => inFlight.current === controller;
 
     try {
       const response = await fetch("/api/route", {
@@ -195,9 +200,9 @@ export default function RouterLab() {
       }
       runCounter.current += 1;
       setRun({ id: runCounter.current, ...snapshot, result: payload.result });
-      setHistory((prev) => [payload.logEntry, ...prev].slice(0, MAX_HISTORY));
+      if (epoch === historyEpoch.current) setHistory((prev) => [payload.logEntry, ...prev].slice(0, MAX_HISTORY));
     } catch (e) {
-      if (!isCurrent()) return; // aborted by a clear or reset; nothing to report
+      if (!isCurrent()) return; // aborted by a reset; nothing to report
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (isCurrent()) {
@@ -326,6 +331,7 @@ export default function RouterLab() {
                     Options must include <code className="font-mono">{requiredId}</code>.
                   </span>
                 )}
+                {tooManyOptions && <span className="text-xs text-bad">At most {MAX_OPTIONS} options per request.</span>}
               </div>
 
               {error && (
