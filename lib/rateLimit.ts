@@ -41,7 +41,13 @@ export function createRateLimiter(windowMs: number): RateLimiter {
       }
       recent.push(now);
       hits.set(key, recent);
-      if (hits.size > MAX_TRACKED_KEYS) prune(cutoff);
+if (hits.size > MAX_TRACKED_KEYS) {
+        prune(cutoff);
+        if (hits.size > MAX_TRACKED_KEYS) {
+          const oldestKey = hits.keys().next().value;
+          if (oldestKey !== undefined) hits.delete(oldestKey);
+        }
+      }
       return true;
     },
     reset() {
