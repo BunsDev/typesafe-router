@@ -1,5 +1,6 @@
 "use client";
 
+import { MAX_OPTION_DESCRIPTION_CHARS, MAX_OPTION_ID_CHARS, MAX_OPTION_LABEL_CHARS } from "@/lib/limits";
 import type { RouteOption } from "@/types/router";
 
 type Props = {
@@ -16,7 +17,7 @@ function slugify(label: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
-    .slice(0, 40);
+    .slice(0, MAX_OPTION_ID_CHARS);
 }
 
 function LockIcon() {
@@ -43,6 +44,9 @@ function CloseIcon() {
 export default function OptionEditor({ options, requiredId, onChange, onReset, disabled }: Props) {
   const ids = options.map((o) => o.id);
   const duplicateIds = new Set(ids.filter((id, i) => ids.indexOf(id) !== i));
+  // Only the FIRST row carrying the required id is locked. If another row is edited to the same
+  // id it stays editable and removable, so the duplicate can be fixed without resetting the list.
+  const requiredIndex = ids.indexOf(requiredId);
 
   function update(index: number, patch: Partial<RouteOption>) {
     onChange(options.map((o, i) => (i === index ? { ...o, ...patch } : o)));
@@ -79,7 +83,7 @@ export default function OptionEditor({ options, requiredId, onChange, onReset, d
 
           <ul className="divide-y divide-line rounded-lg border border-line bg-panel">
             {options.map((option, index) => {
-              const isRequired = option.id === requiredId;
+              const isRequired = index === requiredIndex;
               const isDuplicate = duplicateIds.has(option.id);
               const isEmpty = option.id.trim().length === 0;
               const idInvalid = isDuplicate || isEmpty;
@@ -94,6 +98,7 @@ export default function OptionEditor({ options, requiredId, onChange, onReset, d
                       value={option.id}
                       disabled={disabled || isRequired}
                       spellCheck={false}
+                      maxLength={MAX_OPTION_ID_CHARS}
                       onChange={(e) => update(index, { id: slugify(e.target.value) || e.target.value.toLowerCase() })}
                       aria-invalid={idInvalid}
                       aria-label={`Option ${index + 1} id`}
@@ -104,6 +109,7 @@ export default function OptionEditor({ options, requiredId, onChange, onReset, d
                     className="field-inline"
                     value={option.label}
                     disabled={disabled}
+                    maxLength={MAX_OPTION_LABEL_CHARS}
                     data-option-label
                     aria-label={`Option ${index + 1} label`}
                     onChange={(e) => {
@@ -118,6 +124,7 @@ export default function OptionEditor({ options, requiredId, onChange, onReset, d
                     className="field-inline text-ink-2"
                     value={option.description}
                     disabled={disabled}
+                    maxLength={MAX_OPTION_DESCRIPTION_CHARS}
                     aria-label={`Option ${index + 1} description`}
                     onChange={(e) => update(index, { description: e.target.value })}
                   />

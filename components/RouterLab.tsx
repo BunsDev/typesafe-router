@@ -10,7 +10,8 @@ import ThemeToggle from "@/components/ThemeToggle";
 import ThresholdSlider from "@/components/ThresholdSlider";
 import { apiKeyHeaders } from "@/lib/apiKeyStorage";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/jevRouter";
-import { clearLabState, historyToJson, loadLabState, saveLabState } from "@/lib/labStorage";
+import { clearLabState, historyToJson, loadLabState, MAX_HISTORY, saveLabState } from "@/lib/labStorage";
+import { MAX_CONTEXT_CHARS, MAX_INPUT_CHARS } from "@/lib/limits";
 import { defaultOptions, requiredOptionId } from "@/lib/routerConfigs";
 import type { RouteApiError, RouteApiRequest, RouteApiResponse, RouteOption, RouterMode, RoutingLogEntry } from "@/types/router";
 
@@ -46,6 +47,13 @@ function cloneOptions(mode: RouterMode): RouteOption[] {
   return defaultOptions[mode].map((o) => ({ ...o, metadata: o.metadata ? { ...o.metadata } : undefined }));
 }
 
+function defaultOptionsByMode(): Record<RouterMode, RouteOption[]> {
+  return { model: cloneOptions("model"), tool: cloneOptions("tool") };
+}
+
+/** Compared against the live state so an untouched lab leaves nothing behind in storage. */
+const DEFAULT_OPTIONS_JSON = JSON.stringify(defaultOptionsByMode());
+
 /** Read once at mount. This component is rendered client-only (see LabLoader), so storage is safe to touch here. */
 const restored = typeof window !== "undefined" ? loadLabState() : null;
 
@@ -54,9 +62,7 @@ export default function RouterLab() {
   const [input, setInput] = useState<string>(SAMPLE_INPUTS.tool[0]);
   const [context, setContext] = useState("");
   const [showContext, setShowContext] = useState(false);
-  const [optionsByMode, setOptionsByMode] = useState<Record<RouterMode, RouteOption[]>>(
-    () => restored?.optionsByMode ?? { model: cloneOptions("model"), tool: cloneOptions("tool") },
-  );
+  const [optionsByMode, setOptionsByMode] = useState<Record<RouterMode, RouteOption[]>>(() => restored?.optionsByMode ?? defaultOptionsByMode());
   const [threshold, setThreshold] = useState<number>(restored?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD);
   /** null = still checking. */
   const [serverHasKey, setServerHasKey] = useState<boolean | null>(null);
@@ -68,6 +74,9 @@ export default function RouterLab() {
   const [run, setRun] = useState<RunState | null>(null);
   const [history, setHistory] = useState<RoutingLogEntry[]>(restored?.history ?? []);
   const runCounter = useRef(0);
+  /** Bumped on every run, clear and reset. A response whose sequence number is stale is dropped. */
+  const requestSeq = useRef(0);
+  const inFlight = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const options = optionsByMode[mode];
@@ -94,15 +103,33 @@ export default function RouterLab() {
   }, []);
 
   // Persist edits so a refresh doesn't lose them. Writes to an external system, so an effect is the right tool.
+  // When everything is back at its defaults the stored blob is removed rather than rewritten, so
+  // "Reset everything" (and a manual return to defaults) really does clear the browser's copy.
   useEffect(() => {
-    saveLabState({ optionsByMode, threshold, history });
+    const isDefault = history.length === 0 && threshold === DEFAULT_CONFIDENCE_THRESHOLD && JSON.stringify(optionsByMode) === DEFAULT_OPTIONS_JSON;
+    if (isDefault) clearLabState();
+    else saveLabState({ optionsByMode, threshold, history });
   }, [optionsByMode, threshold, history]);
 
   const setOptions = useCallback((next: RouteOption[]) => setOptionsByMode((prev) => ({ ...prev, [mode]: next })), [mode]);
 
+  /** Forget any in-flight request so a slow response can't land after a clear or reset and undo it. */
+  function discardInFlight() {
+    requestSeq.current += 1;
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setLoading(false);
+  }
+
+  function clearHistory() {
+    discardInFlight();
+    setHistory([]);
+  }
+
   function resetEverything() {
+    discardInFlight();
     clearLabState();
-    setOptionsByMode({ model: cloneOptions("model"), tool: cloneOptions("tool") });
+    setOptionsByMode(defaultOptionsByMode());
     setThreshold(DEFAULT_CONFIDENCE_THRESHOLD);
     setHistory([]);
     setRun(null);
@@ -126,9 +153,12 @@ export default function RouterLab() {
     if (!input.trim() || SAMPLE_INPUTS[mode].includes(input)) setInput(SAMPLE_INPUTS[next][0]);
   }
 
-  function recall(entry: { mode: RouterMode; userInput: string }) {
+  /** Load a logged decision's request back into the panel: mode, input AND context, so re-running it reproduces it. */
+  function recall(entry: RoutingLogEntry) {
     setMode(entry.mode);
     setInput(entry.userInput);
+    setContext(entry.context ?? "");
+    if (entry.context) setShowContext(true);
     setError(null);
     textareaRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
     textareaRef.current?.focus();
@@ -142,25 +172,38 @@ export default function RouterLab() {
     const snapshot = { mode, userInput: input, context: trimmedContext, options: options.map((o) => ({ ...o })), threshold };
     const body: RouteApiRequest = { mode, userInput: input, context: trimmedContext, options: snapshot.options, confidenceThreshold: threshold };
 
+    requestSeq.current += 1;
+    const seq = requestSeq.current;
+    const controller = new AbortController();
+    inFlight.current?.abort();
+    inFlight.current = controller;
+    const isCurrent = () => seq === requestSeq.current;
+
     try {
       const response = await fetch("/api/route", {
         method: "POST",
         // apiKeyHeaders() adds x-typesafe-api-key if the user saved a key in this browser.
         headers: { "Content-Type": "application/json", ...apiKeyHeaders() },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
       const payload = (await response.json()) as RouteApiResponse | RouteApiError;
+      if (!isCurrent()) return;
       if (!response.ok || "error" in payload) {
         const err = payload as RouteApiError;
         throw new Error(err.error ?? `Request failed with HTTP ${response.status}.`);
       }
       runCounter.current += 1;
       setRun({ id: runCounter.current, ...snapshot, result: payload.result });
-      setHistory((prev) => [payload.logEntry, ...prev].slice(0, 200));
+      setHistory((prev) => [payload.logEntry, ...prev].slice(0, MAX_HISTORY));
     } catch (e) {
+      if (!isCurrent()) return; // aborted by a clear or reset; nothing to report
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (isCurrent()) {
+        inFlight.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -212,6 +255,7 @@ export default function RouterLab() {
                   onChange={(e) => setInput(e.target.value)}
                   placeholder={mode === "model" ? "What should a model handle?" : "What does the user want?"}
                   aria-label="User input"
+                  maxLength={MAX_INPUT_CHARS}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                       e.preventDefault();
@@ -252,8 +296,14 @@ export default function RouterLab() {
                       onChange={(e) => setContext(e.target.value)}
                       placeholder={"Recent turns Jev should see, e.g.\nuser: I'm planning a trip to Lisbon next week\nassistant: Nice! Anything you need help with?"}
                       aria-label="Conversation context"
+                      maxLength={MAX_CONTEXT_CHARS}
                     />
-                    <p className="mt-1 text-[11px] text-muted">Appended to the request as extra state. Try &quot;Is it free?&quot; with and without context to see the pick change.</p>
+                    <p className="mt-1 text-[11px] text-muted">
+                      Appended to the request as extra state. Try &quot;Is it free?&quot; with and without context to see the pick change.
+                      {context.length > MAX_CONTEXT_CHARS * 0.9 && (
+                        <span className="tnum"> {context.length.toLocaleString()} / {MAX_CONTEXT_CHARS.toLocaleString()} characters.</span>
+                      )}
+                    </p>
                   </div>
                 )}
               </div>
@@ -356,7 +406,7 @@ export default function RouterLab() {
           </span>
           {history.length > 0 && <span className="panel-hint">{history.length} logged</span>}
         </div>
-        <RoutingHistoryTable entries={history} onClear={() => setHistory([])} onExport={exportHistory} onRecall={recall} />
+        <RoutingHistoryTable entries={history} onClear={clearHistory} onExport={exportHistory} onRecall={recall} />
       </section>
 
       <footer className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center text-xs text-muted">

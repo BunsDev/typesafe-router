@@ -43,13 +43,21 @@ You don't need `.env.local` to route with real Jev. Click the status pill in the
 
 If you deploy this publicly, note that a browser key is sent to *your* server on every call. That is how the key stays out of the browser's network exposure to third parties, but it means users are trusting your deployment. Say so on the page if that matters for your audience.
 
+### Limits on a public deployment
+
+`/api/route` is unauthenticated, so it bounds what one request can make the server do (`lib/limits.ts`): the input and the context are capped at 20,000 characters each, an option list at 32 entries, and each option's id, label and description at 64, 120 and 1,000 characters. A body over 256 KB is refused with 413 before it is parsed. The lab applies the same caps as `maxLength` on its fields.
+
+Calls that would spend the **server's** key are also rate limited per caller IP: `ROUTE_RATE_LIMIT_PER_MINUTE` (default 60, `0` disables) returns 429 with code `rate_limited` once exceeded. Calls that carry a browser-saved key are not counted; they spend that user's credits. The counter is per process, so on a serverless host it slows casual abuse rather than enforcing a global quota. Put a gateway limiter or an auth wall in front if the deployment is meant for strangers.
+
 ### What the lab remembers
 
-Edited options, the threshold, and the routing history are saved in your browser (`localStorage`, key `jev-router:lab`) so a refresh doesn't lose them. **Reset everything** in the footer clears them. **Export JSON** in the history panel downloads the full log, one `RoutingLogEntry` per decision, for review or tuning. The API key is stored separately and is never part of this blob.
+Edited options, the threshold, and the routing history are saved in your browser (`localStorage`, key `jev-router:lab`) so a refresh doesn't lose them. **Reset everything** in the footer removes the stored copy; nothing is written back until you change something again. **Export JSON** in the history panel downloads the full log, one `RoutingLogEntry` per decision, for review or tuning. The API key is stored separately and is never part of this blob. Whatever is read back is validated field by field, and a malformed entry is dropped rather than rendered.
+
+Selecting a request in the history table (click the row, or Tab to it and press Enter) loads its mode, input **and** conversation context back into the request panel, so re-running it reproduces the logged decision. Clearing the history or resetting the lab also discards any routing call still in flight, so a slow response can't reappear afterwards.
 
 The **Conversation context** field under the input is the `context` half of `RouteRequest`: recent turns that should influence the pick. Try "Is it free?" on its own and then with a prior turn about Thursday afternoon.
 
-Other scripts: `npm test` (vitest, 40 tests covering the engine, the wire format, the simulator, and storage), `npm run typecheck`, `npm run lint`, `npm run build`.
+Other scripts: `npm test` (vitest, 64 tests covering the engine, the wire format, the simulator, storage, the rate limiter, and the API route), `npm run typecheck` (runs `next typegen` first so a clean checkout has the generated `next-env.d.ts`, which is gitignored as Next.js recommends), `npm run lint`, `npm run build`.
 
 ## The two routers
 
@@ -89,7 +97,7 @@ if (result.effectiveOptionId) {
 
 The lower-level pieces are exported too:
 
-- `routeWithJev(request, threshold?, transport?)` → a raw `RouteDecision` with Jev's pick and `fallbackUsed` set, no policy applied. Throws `RouteIntegrityError` if Jev's answer isn't in the option list.
+- `routeWithJev(request, threshold?, transport?)` → a raw `RouteDecision` with Jev's pick and `fallbackUsed` set, no policy applied. Throws `RouteIntegrityError` if Jev's answer isn't in the option list, isn't a `choice` answer, or is missing. A valid pick that arrives without a confidence (and without probabilities) is kept at confidence 0, so it takes the ordinary low-confidence path rather than being reported as invalid.
 - `resolveFallback(decision, options, policy, source)` → applies a `FallbackPolicy` to a decision. Pure, no I/O.
 - `assertFallbackOption(options, policy)` → the runtime check described below.
 - `buildRouterContext(request)` / `buildJevRequest(request)` → the exact text and question sent to Jev, so you can inspect or test it.
@@ -109,7 +117,7 @@ type RouteDecision = { selectedOptionId: string; confidence: number; allOptionSc
 
 Append to `modelRouterOptions` or `toolRouterOptions` in `lib/routerConfigs.ts`, or build your own list at call time; the option list is a plain array passed with every request. Two rules:
 
-1. Every `id` must be unique. It is the only value Jev can return, so make it stable.
+1. Every `id` must be unique. It is the only value Jev can return, so make it stable. Ids are used as object keys in the wire format and the score maps, and the library builds and reads those maps so that awkward ids such as `constructor` or `__proto__` behave like any other.
 2. The list must still contain the option the fallback policy requires (`general_model` for the model router, `no_tool_needed` for the tool router). Otherwise `createRouter(...).route()` throws a `RouterConfigError` **before** calling Jev:
 
    ```text
@@ -141,7 +149,9 @@ Every call produces one `RoutingLogEntry` with the input, the options considered
 ```text
 lib/
   apiKeyStorage.ts      browser-only key storage; the only reader hands the key straight to fetch
-  labStorage.ts         browser-only persistence of options, threshold and history; JSON export
+  labStorage.ts         browser-only persistence of options, threshold and history, validated on load; JSON export
+  limits.ts             size caps shared by the API route (enforced) and the UI (maxLength)
+  rateLimit.ts          in-memory sliding-window limiter for calls that spend the server key
   jevClient.ts          low-level Jev API wrapper (wire format, errors, normalisation)
   jevRouter.ts          engine: validation, routeWithJev, resolveFallback, createRouter, logging
   routerConfigs.ts      modelRouterOptions, toolRouterOptions, fallback policies
@@ -170,6 +180,8 @@ components/
 ## Jev wire format, for reference
 
 `lib/jevClient.ts` converts the router's request into TypeSafe's format:
+
+The request line is JSON-encoded, so quotes and newlines inside the user's text are escaped and cannot pose as the `Options:` or `Conversation context:` sections that follow.
 
 ```jsonc
 // POST https://api.typesafe.ai/v1/systemone   Authorization: Bearer <key>

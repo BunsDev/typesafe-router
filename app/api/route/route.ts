@@ -11,17 +11,48 @@
  * `redact` so a key can't leak back to the screen. This route does NOT execute
  * the chosen option: what "web_search" means is the consuming app's business,
  * and this demo only ever displays it.
+ *
+ * Because the endpoint is unauthenticated, every text field and the body as a
+ * whole are bounded (`lib/limits.ts`), and calls that would spend the SERVER's
+ * key are rate limited per caller (`ROUTE_RATE_LIMIT_PER_MINUTE`, default 60,
+ * 0 disables). Calls carrying the user's own key spend the user's credits and
+ * are not limited here.
  */
 
 import { API_KEY_HEADER } from "@/lib/apiKeyStorage";
 import { callJev, hasJevApiKey, JevApiError, type JevRequest } from "@/lib/jevClient";
 import { createRouter, RouterConfigError } from "@/lib/jevRouter";
+import {
+  MAX_BODY_BYTES,
+  MAX_CONTEXT_CHARS,
+  MAX_INPUT_CHARS,
+  MAX_OPTION_DESCRIPTION_CHARS,
+  MAX_OPTION_ID_CHARS,
+  MAX_OPTION_LABEL_CHARS,
+  MAX_OPTIONS,
+} from "@/lib/limits";
 import { mockCallJev } from "@/lib/mockRouter";
+import { createRateLimiter } from "@/lib/rateLimit";
 import { routerConfigs } from "@/lib/routerConfigs";
 import type { RouteApiError, RouteApiRequest, RouteApiResponse, RouteOption } from "@/types/router";
 
-const MAX_INPUT_CHARS = 20_000;
-const MAX_OPTIONS = 32;
+export const DEFAULT_SERVER_KEY_LIMIT_PER_MINUTE = 60;
+
+/** Shared across requests in this process. Exported so tests can reset it. */
+export const serverKeyLimiter = createRateLimiter(60_000);
+
+function serverKeyLimitPerMinute(): number {
+  const raw = process.env.ROUTE_RATE_LIMIT_PER_MINUTE?.trim();
+  if (!raw) return DEFAULT_SERVER_KEY_LIMIT_PER_MINUTE;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : DEFAULT_SERVER_KEY_LIMIT_PER_MINUTE;
+}
+
+/** Best-effort caller identity for rate limiting: first forwarded IP, else the direct one, else a shared bucket. */
+function callerKey(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0].trim();
+  return (forwarded || request.headers.get("x-real-ip")?.trim() || "unknown").slice(0, 100);
+}
 
 /** Strip a secret from any text that might be shown to the user. */
 export function redact(text: string, secret: string | undefined): string {
@@ -42,11 +73,17 @@ export function validateBody(body: unknown): string | null {
   if (typeof userInput !== "string" || userInput.trim().length === 0) return "`userInput` must be a non-empty string.";
   if (userInput.length > MAX_INPUT_CHARS) return `Input is too long (max ${MAX_INPUT_CHARS.toLocaleString()} characters).`;
   if (context !== undefined && typeof context !== "string") return "`context` must be a string when present.";
+  if (context !== undefined && context.length > MAX_CONTEXT_CHARS) return `Context is too long (max ${MAX_CONTEXT_CHARS.toLocaleString()} characters).`;
   if (!Array.isArray(options) || options.length < 2) return "`options` must be an array with at least two entries.";
   if (options.length > MAX_OPTIONS) return `Too many options (max ${MAX_OPTIONS}).`;
   for (const o of options as Partial<RouteOption>[]) {
     if (!o || typeof o.id !== "string" || !o.id.trim()) return "Every option needs a non-empty `id`.";
+    if (o.id.length > MAX_OPTION_ID_CHARS) return `Option id "${o.id.slice(0, 16)}…" is too long (max ${MAX_OPTION_ID_CHARS} characters).`;
     if (typeof o.label !== "string" || typeof o.description !== "string") return `Option "${o.id}" needs a \`label\` and \`description\`.`;
+    if (o.label.length > MAX_OPTION_LABEL_CHARS) return `Option "${o.id}" label is too long (max ${MAX_OPTION_LABEL_CHARS} characters).`;
+    if (o.description.length > MAX_OPTION_DESCRIPTION_CHARS) {
+      return `Option "${o.id}" description is too long (max ${MAX_OPTION_DESCRIPTION_CHARS.toLocaleString()} characters).`;
+    }
   }
   if (confidenceThreshold !== undefined && !(typeof confidenceThreshold === "number" && confidenceThreshold >= 0 && confidenceThreshold <= 1)) {
     return "`confidenceThreshold` must be a number between 0 and 1.";
@@ -60,9 +97,15 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const tooLarge = `Request body is too large (max ${Math.round(MAX_BODY_BYTES / 1024)} KB).`;
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return fail(tooLarge, "validation", 413);
+
   let body: unknown;
   try {
-    body = await request.json();
+    const text = await request.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return fail(tooLarge, "validation", 413);
+    body = JSON.parse(text);
   } catch {
     return fail("Request body was not valid JSON.", "validation", 400);
   }
@@ -72,7 +115,12 @@ export async function POST(request: Request): Promise<Response> {
 
   const { mode, userInput, context, options, confidenceThreshold } = body as RouteApiRequest;
   const userKey = request.headers.get(API_KEY_HEADER)?.trim() || "";
-  const apiKey = userKey || process.env.TYPESAFE_API_KEY?.trim() || "";
+  const serverKey = process.env.TYPESAFE_API_KEY?.trim() || "";
+  const apiKey = userKey || serverKey;
+
+  if (!userKey && serverKey && !serverKeyLimiter.allow(callerKey(request), serverKeyLimitPerMinute())) {
+    return fail("Too many requests are using this server's key. Wait a minute, or add your own TypeSafe key.", "rate_limited", 429);
+  }
 
   // Same engine either way; only the transport differs.
   const router = apiKey

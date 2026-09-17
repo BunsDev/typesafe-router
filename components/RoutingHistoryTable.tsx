@@ -1,7 +1,7 @@
 "use client";
 
 import { confidenceTone } from "@/components/RoutingResult";
-import type { RouterMode, RoutingLogEntry } from "@/types/router";
+import type { RoutingLogEntry } from "@/types/router";
 
 const TONE_TEXT = { ok: "text-ok", warn: "text-warn", bad: "text-bad" } as const;
 
@@ -13,8 +13,8 @@ type Props = {
   entries: RoutingLogEntry[];
   onClear: () => void;
   onExport: () => void;
-  /** Load an entry's input and mode back into the request panel. */
-  onRecall: (entry: { mode: RouterMode; userInput: string }) => void;
+  /** Load an entry's mode, input and context back into the request panel. */
+  onRecall: (entry: RoutingLogEntry) => void;
 };
 
 export default function RoutingHistoryTable({ entries, onClear, onExport, onRecall }: Props) {
@@ -46,13 +46,26 @@ export default function RoutingHistoryTable({ entries, onClear, onExport, onReca
             {entries.map((e) => (
               <tr
                 key={e.id}
-                className="enter cursor-pointer border-b border-line/60 align-top transition-colors duration-100 hover:bg-panel-2"
-                onClick={() => onRecall({ mode: e.mode, userInput: e.userInput })}
-                title="Click to load this input"
+                className="enter cursor-pointer border-b border-line/60 align-top transition-colors duration-100 hover:bg-panel-2 focus-within:bg-panel-2"
+                onClick={() => onRecall(e)}
+                title="Click to load this request"
               >
                 <td className="tnum whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{formatTime(e.timestamp)}</td>
                 <td className="px-3 py-2 text-xs text-ink-2">{e.mode}</td>
-                <td className="max-w-[20rem] truncate px-3 py-2 text-ink-2">{e.userInput}</td>
+                <td className="max-w-[20rem] px-3 py-2">
+                  {/* The row's click is a mouse convenience; this button is the focusable, keyboard-operable control. */}
+                  <button
+                    type="button"
+                    className="block w-full truncate rounded-sm text-left text-ink-2 underline-offset-2 hover:underline"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRecall(e);
+                    }}
+                    aria-label={`Load this request: ${e.userInput}`}
+                  >
+                    {e.userInput}
+                  </button>
+                </td>
                 <td className="px-3 py-2 font-mono text-xs">{e.selectedOptionId || <span className="text-bad">invalid</span>}</td>
                 <td className="px-3 py-2 font-mono text-xs">{e.effectiveOptionId ?? <span className="text-warn">ask user</span>}</td>
                 <td className={`tnum px-3 py-2 text-right font-mono text-xs ${TONE_TEXT[confidenceTone(e.confidence, e.confidenceThreshold)]}`}>
@@ -76,7 +89,7 @@ export default function RoutingHistoryTable({ entries, onClear, onExport, onReca
       </div>
       <div className="flex items-center justify-between px-3 py-2 text-xs text-muted">
         <span>
-          {entries.length} decision{entries.length === 1 ? "" : "s"} · newest first · click a row to reload its input
+          {entries.length} decision{entries.length === 1 ? "" : "s"} · newest first · select a request to load it again
         </span>
         <span className="flex items-center gap-1">
           <button type="button" className="btn btn-ghost h-7 px-2 text-xs" onClick={onExport}>

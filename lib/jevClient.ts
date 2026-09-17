@@ -54,9 +54,13 @@ export type JevChoiceAnswer = {
   value: string;
   /** 0–1 probability for every option key Jev reported. */
   optionProbabilities?: Record<string, number>;
-  /** 0–1. From Jev directly; falls back to the winning option's probability if absent. */
+  /**
+   * 0–1. From Jev directly; falls back to the winning option's probability if
+   * absent, and to 0 when neither is reported (a valid pick with unknown
+   * confidence is treated as a low-confidence pick, not an invalid one).
+   */
   confidence: number;
-  /** True when the answer was missing, malformed, or outside the option list. */
+  /** True when the answer was missing, malformed, not a `choice`, or outside the option list. */
   needsReview: boolean;
 };
 
@@ -92,6 +96,21 @@ export class JevApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Option ids as object keys
+// ---------------------------------------------------------------------------
+
+/**
+ * Option ids become object keys in the wire format and in score maps, and an
+ * id such as `constructor` or `__proto__` would otherwise be read from (or, for
+ * `__proto__`, silently swallowed by) `Object.prototype`. Every read of a map
+ * keyed by option id goes through this, and every such map is built with
+ * `Object.fromEntries`, which defines own properties instead of assigning.
+ */
+export function readOwn<T>(map: Record<string, T> | undefined | null, key: string): T | undefined {
+  return map && typeof map === "object" && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Wire conversion
 // ---------------------------------------------------------------------------
 
@@ -113,14 +132,12 @@ export function toWireRequest(
   request: JevRequest,
   model: string = process.env.JEV_MODEL?.trim() || DEFAULT_JEV_MODEL,
 ): { state: string; model: string; questions: Record<string, WireChoiceQuestion> } {
-  const questions: Record<string, WireChoiceQuestion> = {};
-  for (const question of request.questions) {
-    const criteria: Record<string, string> = {};
-    for (const option of question.options) {
-      criteria[option] = question.optionDescriptions?.[option] ?? option;
-    }
-    questions[question.id] = { type: "choice", instructions: question.question, criteria };
-  }
+  const questions = Object.fromEntries(
+    request.questions.map((question) => {
+      const criteria = Object.fromEntries(question.options.map((option) => [option, readOwn(question.optionDescriptions, option) ?? option]));
+      return [question.id, { type: "choice" as const, instructions: question.question, criteria }];
+    }),
+  );
   return { state: request.context, model, questions };
 }
 
@@ -134,36 +151,36 @@ function clamp01(value: number): number {
 
 /**
  * Turn Jev's raw answers into `JevChoiceAnswer`s. Never throws on a single bad
- * answer: a missing, malformed, or out-of-list choice becomes `needsReview: true`
- * with an empty `value`, so the router can apply its fallback policy instead of
- * crashing (and, crucially, instead of treating free text as a route).
+ * answer: a missing, malformed, non-`choice`, or out-of-list choice becomes
+ * `needsReview: true` with an empty `value`, so the router can apply its
+ * fallback policy instead of crashing (and, crucially, instead of treating
+ * free text as a route).
  */
 export function normalizeAnswers(request: JevRequest, body: WireResponse): JevChoiceAnswer[] {
-  const answers = body.answers ?? {};
+  const answers = body.answers && typeof body.answers === "object" ? body.answers : {};
 
   return request.questions.map((question) => {
-    const raw = answers[question.id];
-    const choice = raw?.choice;
+    const raw = readOwn(answers, question.id);
     const probabilities = sanitizeProbabilities(raw?.probabilities, question.options);
-    const validChoice = typeof choice === "string" && question.options.includes(choice);
+    const choice = raw?.choice;
+    const isChoiceAnswer = raw?.type === undefined || raw.type === "choice";
+    const validChoice = isChoiceAnswer && typeof choice === "string" && question.options.includes(choice);
 
     if (!validChoice) {
       return { id: question.id, type: "choice", value: "", optionProbabilities: probabilities, confidence: 0, needsReview: true };
     }
 
-    const confidence = isFiniteNumber(raw?.confidence)
-      ? clamp01(raw.confidence)
-      : isFiniteNumber(probabilities?.[choice])
-        ? probabilities[choice]
-        : null;
+    // A valid pick whose confidence Jev didn't report is still a valid pick.
+    // Zero confidence sends it down the router's low-confidence path.
+    const confidence = isFiniteNumber(raw?.confidence) ? clamp01(raw.confidence) : (readOwn(probabilities, choice) ?? 0);
 
     return {
       id: question.id,
       type: "choice",
       value: choice,
       optionProbabilities: probabilities,
-      confidence: confidence ?? 0,
-      needsReview: confidence === null,
+      confidence,
+      needsReview: false,
     };
   });
 }
@@ -174,12 +191,12 @@ function sanitizeProbabilities(
   options: string[],
 ): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const out: Record<string, number> = {};
+  const entries: [string, number][] = [];
   for (const option of options) {
-    const p = raw[option];
-    if (isFiniteNumber(p)) out[option] = clamp01(p);
+    const p = readOwn(raw, option);
+    if (isFiniteNumber(p)) entries.push([option, clamp01(p)]);
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 export function describeHttpError(status: number, raw: string): JevApiError {
