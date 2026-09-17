@@ -12,11 +12,12 @@ function formatTime(iso: string): string {
 type Props = {
   entries: RoutingLogEntry[];
   onClear: () => void;
+  onExport: () => void;
   /** Load an entry's input and mode back into the request panel. */
   onRecall: (entry: { mode: RouterMode; userInput: string }) => void;
 };
 
-export default function RoutingHistoryTable({ entries, onClear, onRecall }: Props) {
+export default function RoutingHistoryTable({ entries, onClear, onExport, onRecall }: Props) {
   if (entries.length === 0) {
     return (
       <p className="px-4 py-8 text-center text-sm text-muted">
@@ -77,9 +78,14 @@ export default function RoutingHistoryTable({ entries, onClear, onRecall }: Prop
         <span>
           {entries.length} decision{entries.length === 1 ? "" : "s"} · newest first · click a row to reload its input
         </span>
-        <button type="button" className="btn btn-ghost h-7 px-2 text-xs" onClick={onClear}>
-          Clear
-        </button>
+        <span className="flex items-center gap-1">
+          <button type="button" className="btn btn-ghost h-7 px-2 text-xs" onClick={onExport}>
+            Export JSON
+          </button>
+          <button type="button" className="btn btn-ghost h-7 px-2 text-xs" onClick={onClear}>
+            Clear
+          </button>
+        </span>
       </div>
     </div>
   );

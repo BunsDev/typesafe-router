@@ -3,8 +3,8 @@ import { buildJevRequest } from "@/lib/jevRouter";
 import { mockCallJev } from "@/lib/mockRouter";
 import { modelRouterOptions, toolRouterOptions } from "@/lib/routerConfigs";
 
-async function pick(userInput: string, options = toolRouterOptions) {
-  const [answer] = await mockCallJev(buildJevRequest({ userInput, options }));
+async function pick(userInput: string, options = toolRouterOptions, context?: string) {
+  const [answer] = await mockCallJev(buildJevRequest({ userInput, context, options }));
   return answer;
 }
 
@@ -35,6 +35,13 @@ describe("mockCallJev (demo mode)", () => {
     expect((await pick("Fix this TypeScript bug: const x: number = 'a'", modelRouterOptions)).value).toBe("code_model");
     expect((await pick("What is the capital of Peru?", modelRouterOptions)).value).toBe("fast_cheap_model");
     expect((await pick("Explain step by step why this plan is optimal and analyze the trade-offs", modelRouterOptions)).value).toBe("reasoning_model");
+  });
+
+  it("lets conversation context nudge an ambiguous request", async () => {
+    const bare = await pick("Is it free?");
+    const withContext = await pick("Is it free?", toolRouterOptions, "user: do I have anything on Thursday afternoon?\nassistant: Let me check.");
+    expect(withContext.value).toBe("calendar_lookup");
+    expect(withContext.optionProbabilities!.calendar_lookup).toBeGreaterThan(bare.optionProbabilities!.calendar_lookup);
   });
 
   it("scores user-added options from their description words", async () => {

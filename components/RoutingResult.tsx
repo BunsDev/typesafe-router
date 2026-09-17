@@ -9,6 +9,7 @@ import type { ResolvedRoute, RouteOption, RouterMode } from "@/types/router";
 type Props = {
   mode: RouterMode;
   userInput: string;
+  context?: string;
   options: RouteOption[];
   result: ResolvedRoute;
   threshold: number;
@@ -80,7 +81,7 @@ function ConfidenceRing({ value, threshold, tone }: { value: number; threshold: 
   );
 }
 
-export default function RoutingResult({ mode, userInput, options, result, threshold }: Props) {
+export default function RoutingResult({ mode, userInput, context, options, result, threshold }: Props) {
   const [showPrompt, setShowPrompt] = useState(false);
   const { decision, action, effectiveOption, source } = result;
   const labels = new Map(options.map((o) => [o.id, o.label]));
@@ -171,7 +172,7 @@ export default function RoutingResult({ mode, userInput, options, result, thresh
         </button>
         {showPrompt && (
           <pre className="enter mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-bg px-3 py-2 font-mono text-xs leading-relaxed text-ink-2">
-            {buildRouterContext({ userInput, options })}
+            {buildRouterContext({ userInput, context, options })}
           </pre>
         )}
       </div>

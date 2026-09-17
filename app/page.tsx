@@ -1,5 +1,5 @@
-import RouterLab from "@/components/RouterLab";
+import LabLoader from "@/components/LabLoader";
 
 export default function Page() {
-  return <RouterLab />;
+  return <LabLoader />;
 }

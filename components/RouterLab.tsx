@@ -10,6 +10,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import ThresholdSlider from "@/components/ThresholdSlider";
 import { apiKeyHeaders } from "@/lib/apiKeyStorage";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/jevRouter";
+import { clearLabState, historyToJson, loadLabState, saveLabState } from "@/lib/labStorage";
 import { defaultOptions, requiredOptionId } from "@/lib/routerConfigs";
 import type { RouteApiError, RouteApiRequest, RouteApiResponse, RouteOption, RouterMode, RoutingLogEntry } from "@/types/router";
 
@@ -35,6 +36,7 @@ type RunState = {
   id: number;
   mode: RouterMode;
   userInput: string;
+  context?: string;
   options: RouteOption[];
   threshold: number;
   result: RouteApiResponse["result"];
@@ -44,14 +46,18 @@ function cloneOptions(mode: RouterMode): RouteOption[] {
   return defaultOptions[mode].map((o) => ({ ...o, metadata: o.metadata ? { ...o.metadata } : undefined }));
 }
 
+/** Read once at mount. This component is rendered client-only (see LabLoader), so storage is safe to touch here. */
+const restored = typeof window !== "undefined" ? loadLabState() : null;
+
 export default function RouterLab() {
   const [mode, setMode] = useState<RouterMode>("tool");
   const [input, setInput] = useState<string>(SAMPLE_INPUTS.tool[0]);
-  const [optionsByMode, setOptionsByMode] = useState<Record<RouterMode, RouteOption[]>>(() => ({
-    model: cloneOptions("model"),
-    tool: cloneOptions("tool"),
-  }));
-  const [threshold, setThreshold] = useState<number>(DEFAULT_CONFIDENCE_THRESHOLD);
+  const [context, setContext] = useState("");
+  const [showContext, setShowContext] = useState(false);
+  const [optionsByMode, setOptionsByMode] = useState<Record<RouterMode, RouteOption[]>>(
+    () => restored?.optionsByMode ?? { model: cloneOptions("model"), tool: cloneOptions("tool") },
+  );
+  const [threshold, setThreshold] = useState<number>(restored?.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD);
   /** null = still checking. */
   const [serverHasKey, setServerHasKey] = useState<boolean | null>(null);
   const userHasKey = useHasStoredApiKey();
@@ -60,7 +66,7 @@ export default function RouterLab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<RunState | null>(null);
-  const [history, setHistory] = useState<RoutingLogEntry[]>([]);
+  const [history, setHistory] = useState<RoutingLogEntry[]>(restored?.history ?? []);
   const runCounter = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -87,7 +93,31 @@ export default function RouterLab() {
     };
   }, []);
 
+  // Persist edits so a refresh doesn't lose them. Writes to an external system, so an effect is the right tool.
+  useEffect(() => {
+    saveLabState({ optionsByMode, threshold, history });
+  }, [optionsByMode, threshold, history]);
+
   const setOptions = useCallback((next: RouteOption[]) => setOptionsByMode((prev) => ({ ...prev, [mode]: next })), [mode]);
+
+  function resetEverything() {
+    clearLabState();
+    setOptionsByMode({ model: cloneOptions("model"), tool: cloneOptions("tool") });
+    setThreshold(DEFAULT_CONFIDENCE_THRESHOLD);
+    setHistory([]);
+    setRun(null);
+    setError(null);
+  }
+
+  function exportHistory() {
+    const blob = new Blob([historyToJson(history)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jev-routing-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   function changeMode(next: RouterMode) {
     if (next === mode) return;
@@ -108,8 +138,9 @@ export default function RouterLab() {
     if (!canRun) return;
     setLoading(true);
     setError(null);
-    const snapshot = { mode, userInput: input, options: options.map((o) => ({ ...o })), threshold };
-    const body: RouteApiRequest = { mode, userInput: input, options: snapshot.options, confidenceThreshold: threshold };
+    const trimmedContext = context.trim() || undefined;
+    const snapshot = { mode, userInput: input, context: trimmedContext, options: options.map((o) => ({ ...o })), threshold };
+    const body: RouteApiRequest = { mode, userInput: input, context: trimmedContext, options: snapshot.options, confidenceThreshold: threshold };
 
     try {
       const response = await fetch("/api/route", {
@@ -197,6 +228,36 @@ export default function RouterLab() {
                 </div>
               </div>
 
+              <div>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted transition-colors duration-150 hover:text-ink"
+                  onClick={() => setShowContext((s) => !s)}
+                  aria-expanded={showContext}
+                  aria-controls="conversation-context"
+                >
+                  <span aria-hidden className="inline-block transition-transform duration-150" style={{ transform: showContext ? "rotate(90deg)" : "rotate(0deg)" }}>
+                    ▸
+                  </span>
+                  Conversation context
+                  {!showContext && context.trim() && <span className="rounded-full bg-teal/15 px-1.5 py-px text-[10px] font-medium text-teal">set</span>}
+                  <span className="text-muted/70">· optional</span>
+                </button>
+                {showContext && (
+                  <div className="enter mt-2">
+                    <textarea
+                      id="conversation-context"
+                      className="field min-h-[4.5rem] resize-y font-mono text-xs leading-relaxed"
+                      value={context}
+                      onChange={(e) => setContext(e.target.value)}
+                      placeholder={"Recent turns Jev should see, e.g.\nuser: I'm planning a trip to Lisbon next week\nassistant: Nice! Anything you need help with?"}
+                      aria-label="Conversation context"
+                    />
+                    <p className="mt-1 text-[11px] text-muted">Appended to the request as extra state. Try &quot;Is it free?&quot; with and without context to see the pick change.</p>
+                  </div>
+                )}
+              </div>
+
               <ThresholdSlider value={threshold} onChange={setThreshold} />
 
               <div className="flex flex-wrap items-center gap-3">
@@ -255,7 +316,7 @@ export default function RouterLab() {
             <div className="p-4">
               {run ? (
                 <div key={run.id} className={loading ? "stale" : ""}>
-                  <RoutingResult mode={run.mode} userInput={run.userInput} options={run.options} result={run.result} threshold={run.threshold} />
+                  <RoutingResult mode={run.mode} userInput={run.userInput} context={run.context} options={run.options} result={run.result} threshold={run.threshold} />
                 </div>
               ) : (
                 <EmptyDecision loading={loading} />
@@ -295,11 +356,18 @@ export default function RouterLab() {
           </span>
           {history.length > 0 && <span className="panel-hint">{history.length} logged</span>}
         </div>
-        <RoutingHistoryTable entries={history} onClear={() => setHistory([])} onRecall={recall} />
+        <RoutingHistoryTable entries={history} onClear={() => setHistory([])} onExport={exportHistory} onRecall={recall} />
       </section>
 
-      <footer className="mt-8 text-center text-xs text-muted">
-        Built on TypeSafe&apos;s Jev. Unofficial demo. Library in <code className="font-mono">lib/</code>, UI in <code className="font-mono">components/</code>.
+      <footer className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center text-xs text-muted">
+        <span>
+          Built on TypeSafe&apos;s Jev. Unofficial demo. Library in <code className="font-mono">lib/</code>, UI in <code className="font-mono">components/</code>.
+        </span>
+        <span aria-hidden>·</span>
+        <span>Options, threshold and history are saved in this browser.</span>
+        <button type="button" className="underline-offset-2 hover:text-ink hover:underline" onClick={resetEverything}>
+          Reset everything
+        </button>
       </footer>
 
       <ApiKeyPanel open={keyDialogOpen} onClose={() => setKeyDialogOpen(false)} serverHasKey={serverHasKey === true} />
