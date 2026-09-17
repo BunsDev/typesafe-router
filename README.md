@@ -57,7 +57,7 @@ Selecting a request in the history table (click the row, or Tab to it and press 
 
 The **Conversation context** field under the input is the `context` half of `RouteRequest`: recent turns that should influence the pick. Try "Is it free?" on its own and then with a prior turn about Thursday afternoon.
 
-Other scripts: `npm test` (vitest, 64 tests covering the engine, the wire format, the simulator, storage, the rate limiter, and the API route), `npm run typecheck` (runs `next typegen` first so a clean checkout has the generated `next-env.d.ts`, which is gitignored as Next.js recommends), `npm run lint`, `npm run build`.
+Other scripts: `npm test` (vitest, 71 tests covering the engine, the wire format, the simulator, storage, the rate limiter, and the API route), `npm run e2e` (Playwright: builds and serves the app in demo mode, then drives the lab and the API through a real browser: recall, persistence, Clear and Reset during a run, the option editor, fallbacks, limits; `--ui` opens Playwright's inspector), `npm run typecheck` (runs `next typegen` first so a clean checkout has the generated `next-env.d.ts`, which is gitignored as Next.js recommends), `npm run lint`, `npm run build`.
 
 ## The two routers
 
@@ -147,6 +147,11 @@ Every call produces one `RoutingLogEntry` with the input, the options considered
 ## Project layout
 
 ```text
+e2e/
+  lab.spec.ts           browser flows against the production build (Playwright)
+  api.spec.ts           /api/route contract in demo mode
+  helpers.ts            locators and a request-delaying route
+playwright.config.ts    builds and serves on :3111 with the key unset
 lib/
   apiKeyStorage.ts      browser-only key storage; the only reader hands the key straight to fetch
   labStorage.ts         browser-only persistence of options, threshold and history, validated on load; JSON export

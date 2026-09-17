@@ -75,6 +75,10 @@ web_modules/
 .cache
 .parcel-cache
 
+# Playwright
+test-results/
+playwright-report/
+
 # Next.js build output
 .next
 out
