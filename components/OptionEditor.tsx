@@ -19,6 +19,27 @@ function slugify(label: string): string {
     .slice(0, 40);
 }
 
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+      <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
+  );
+}
+
+/**
+ * Compact inline editor. Each option is one row; fields look like text until
+ * hovered or focused, so the list reads as a table and edits as a form.
+ */
 export default function OptionEditor({ options, requiredId, onChange, onReset, disabled }: Props) {
   const ids = options.map((o) => o.id);
   const duplicateIds = new Set(ids.filter((id, i) => ids.indexOf(id) !== i));
@@ -37,83 +58,111 @@ export default function OptionEditor({ options, requiredId, onChange, onReset, d
     let n = 2;
     while (ids.includes(id)) id = `${base}_${n++}`;
     onChange([...options, { id, label: "New option", description: "Describe when this option is the right choice." }]);
+    // Focus the new row's label on the next frame so the user can type straight away.
+    requestAnimationFrame(() => {
+      const rows = document.querySelectorAll<HTMLInputElement>("[data-option-label]");
+      rows[rows.length - 1]?.focus();
+      rows[rows.length - 1]?.select();
+    });
   }
 
   return (
-    <div className="space-y-2">
-      {options.map((option, index) => {
-        const isRequired = option.id === requiredId;
-        const isDuplicate = duplicateIds.has(option.id);
-        const isEmpty = option.id.trim().length === 0;
-        return (
-          <div key={index} className={`rounded-md border p-2.5 ${isRequired ? "border-teal/50 bg-teal/5" : "border-line bg-panel-2/40"}`}>
-            <div className="flex items-start gap-2">
-              <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
-                <label className="block">
-                  <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-muted">id</span>
+    <div>
+      <div className="overflow-x-auto">
+        <div className="min-w-[36rem]">
+          <div className="grid grid-cols-[9.5rem_11rem_minmax(0,1fr)_2rem] items-center gap-1 px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+            <span className="px-1.5">id</span>
+            <span className="px-1.5">label</span>
+            <span className="truncate px-1.5">description · read by Jev</span>
+            <span />
+          </div>
+
+          <ul className="divide-y divide-line rounded-lg border border-line bg-panel">
+            {options.map((option, index) => {
+              const isRequired = option.id === requiredId;
+              const isDuplicate = duplicateIds.has(option.id);
+              const isEmpty = option.id.trim().length === 0;
+              const idInvalid = isDuplicate || isEmpty;
+              return (
+                <li
+                  key={index}
+                  className={`grid grid-cols-[9.5rem_11rem_minmax(0,1fr)_2rem] items-center gap-1 px-1.5 py-1 ${isRequired ? "bg-teal/[0.05]" : ""}`}
+                >
+                  <div className="min-w-0">
+                    <input
+                      className={`field-inline font-mono text-[13px] ${idInvalid ? "!border-bad" : ""} ${isRequired ? "text-teal" : ""}`}
+                      value={option.id}
+                      disabled={disabled || isRequired}
+                      spellCheck={false}
+                      onChange={(e) => update(index, { id: slugify(e.target.value) || e.target.value.toLowerCase() })}
+                      aria-invalid={idInvalid}
+                      aria-label={`Option ${index + 1} id`}
+                      title={isRequired ? "Required by the fallback policy. The id is fixed." : undefined}
+                    />
+                  </div>
                   <input
-                    className={`field font-mono ${isDuplicate || isEmpty ? "border-bad" : ""}`}
-                    value={option.id}
-                    disabled={disabled || isRequired}
-                    spellCheck={false}
-                    onChange={(e) => update(index, { id: slugify(e.target.value) || e.target.value.toLowerCase() })}
-                    aria-invalid={isDuplicate || isEmpty}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-muted">label</span>
-                  <input
-                    className="field"
+                    className="field-inline"
                     value={option.label}
                     disabled={disabled}
+                    data-option-label
+                    aria-label={`Option ${index + 1} label`}
                     onChange={(e) => {
                       const patch: Partial<RouteOption> = { label: e.target.value };
-                      // Keep the id in sync with the label while it still looks auto-generated.
                       if (!isRequired && (option.id === slugify(option.label) || option.id.startsWith("new_option"))) {
                         patch.id = slugify(e.target.value) || option.id;
                       }
                       update(index, patch);
                     }}
                   />
-                </label>
-                <label className="block sm:col-span-2">
-                  <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-muted">description (what Jev reads)</span>
                   <input
-                    className="field"
+                    className="field-inline text-ink-2"
                     value={option.description}
                     disabled={disabled}
+                    aria-label={`Option ${index + 1} description`}
                     onChange={(e) => update(index, { description: e.target.value })}
                   />
-                </label>
-              </div>
-              <button
-                type="button"
-                className="btn mt-4 px-2 text-muted hover:text-bad"
-                onClick={() => remove(index)}
-                disabled={disabled || isRequired}
-                title={isRequired ? "Required by the fallback policy. The router refuses option lists without it." : "Remove option"}
-                aria-label={`Remove ${option.label}`}
-              >
-                ✕
-              </button>
-            </div>
-            {isRequired && (
-              <p className="mt-1.5 text-[11px] text-teal">
-                Required fallback option. The router throws if this id is missing from the list.
-              </p>
-            )}
-            {isDuplicate && <p className="mt-1.5 text-[11px] text-bad">Duplicate id. Every option needs a unique id.</p>}
-          </div>
-        );
-      })}
+                  {isRequired ? (
+                    <span
+                      className="inline-flex h-7 w-7 items-center justify-center text-teal"
+                      title="Required fallback option. The router throws if this id is missing."
+                      aria-label="Required fallback option"
+                    >
+                      <LockIcon />
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-ghost h-7 w-7 px-0 text-muted hover:!text-bad"
+                      onClick={() => remove(index)}
+                      disabled={disabled}
+                      aria-label={`Remove ${option.label}`}
+                      title="Remove option"
+                    >
+                      <CloseIcon />
+                    </button>
+                  )}
+                  {isDuplicate && <p className="col-span-4 px-1.5 pb-1 text-[11px] text-bad">Duplicate id. Every option needs a unique id.</p>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
 
-      <div className="flex items-center justify-between pt-1">
+      <div className="mt-3 flex items-center justify-between gap-3">
         <button type="button" className="btn" onClick={add} disabled={disabled}>
-          + Add option
+          <span aria-hidden className="text-base leading-none">+</span> Add option
         </button>
-        <button type="button" className="btn text-muted" onClick={onReset} disabled={disabled}>
-          Reset to defaults
-        </button>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-[11px] text-muted sm:inline">
+            <span className="inline-flex items-center gap-1 text-teal">
+              <LockIcon /> required fallback
+            </span>
+          </span>
+          <button type="button" className="btn btn-ghost text-muted" onClick={onReset} disabled={disabled}>
+            Reset
+          </button>
+        </div>
       </div>
     </div>
   );

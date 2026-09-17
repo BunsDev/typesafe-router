@@ -56,11 +56,19 @@ function extractRequestText(context: string): string {
   return (match ? match[1] : context).toLowerCase();
 }
 
-function scoreOption(optionId: string, description: string | undefined, requestText: string, requestTokens: Set<string>): number {
+/** Pull the optional "Conversation context:" block, so prior turns can nudge the pick. */
+function extractConversation(context: string): string {
+  const match = context.match(/\n\nConversation context:\n([\s\S]*)$/);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function scoreOption(optionId: string, description: string | undefined, requestText: string, requestTokens: Set<string>, conversation = ""): number {
   let score = 0;
 
   for (const hint of KEYWORD_HINTS[optionId] ?? []) {
     if (requestText.includes(hint)) score += hint.length > 3 ? 2 : 1;
+    // Prior turns count for half: they set the topic but the request decides.
+    else if (conversation && conversation.includes(hint)) score += hint.length > 3 ? 1 : 0.5;
   }
 
   // Overlap between the option's own words (id, label, description) and the request.
@@ -93,9 +101,10 @@ export function createMockTransport(options: MockOptions = {}): JevTransport {
 
     const requestText = extractRequestText(request.context);
     const requestTokens = new Set(tokenize(requestText));
+    const conversation = extractConversation(request.context);
 
     return request.questions.map((question) => {
-      const raw = question.options.map((id) => scoreOption(id, question.optionDescriptions?.[id], requestText, requestTokens));
+      const raw = question.options.map((id) => scoreOption(id, question.optionDescriptions?.[id], requestText, requestTokens, conversation));
       const probs = softmax(raw, temperature);
 
       const optionProbabilities: Record<string, number> = {};

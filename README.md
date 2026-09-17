@@ -34,7 +34,7 @@ The key is read only on the server, inside `app/api/route/route.ts`. It is never
 
 ### Bring your own key (safe to stream)
 
-You don't need `.env.local` to route with real Jev. The **API key** panel in the UI lets anyone paste their own TypeSafe key:
+You don't need `.env.local` to route with real Jev. Click the status pill in the header (or **Add your key** in the demo banner) to open the key dialog and paste your own TypeSafe key:
 
 - It is stored in that browser's `localStorage` only (`jev-router:api-key`). It never goes in the URL, in React state that renders, or in a log entry.
 - The input is masked, the draft is wiped the moment you hit Save, and the saved key is never read back into the UI. The only thing rendered is a yes/no "a key is saved in this browser" status. No last-four, no reveal button. Screen-share or livestream the page without worrying.
@@ -43,7 +43,13 @@ You don't need `.env.local` to route with real Jev. The **API key** panel in the
 
 If you deploy this publicly, note that a browser key is sent to *your* server on every call. That is how the key stays out of the browser's network exposure to third parties, but it means users are trusting your deployment. Say so on the page if that matters for your audience.
 
-Other scripts: `npm test` (vitest, 35 tests covering the engine, the wire format, and the simulator), `npm run typecheck`, `npm run lint`, `npm run build`.
+### What the lab remembers
+
+Edited options, the threshold, and the routing history are saved in your browser (`localStorage`, key `jev-router:lab`) so a refresh doesn't lose them. **Reset everything** in the footer clears them. **Export JSON** in the history panel downloads the full log, one `RoutingLogEntry` per decision, for review or tuning. The API key is stored separately and is never part of this blob.
+
+The **Conversation context** field under the input is the `context` half of `RouteRequest`: recent turns that should influence the pick. Try "Is it free?" on its own and then with a prior turn about Thursday afternoon.
+
+Other scripts: `npm test` (vitest, 40 tests covering the engine, the wire format, the simulator, and storage), `npm run typecheck`, `npm run lint`, `npm run build`.
 
 ## The two routers
 
@@ -135,6 +141,7 @@ Every call produces one `RoutingLogEntry` with the input, the options considered
 ```text
 lib/
   apiKeyStorage.ts      browser-only key storage; the only reader hands the key straight to fetch
+  labStorage.ts         browser-only persistence of options, threshold and history; JSON export
   jevClient.ts          low-level Jev API wrapper (wire format, errors, normalisation)
   jevRouter.ts          engine: validation, routeWithJev, resolveFallback, createRouter, logging
   routerConfigs.ts      modelRouterOptions, toolRouterOptions, fallback policies
@@ -144,11 +151,13 @@ lib/
 types/
   router.ts             RouteOption, RouteRequest, RouteDecision, FallbackPolicy, RoutingLogEntry, …
 app/
-  page.tsx              renders RouterLab
+  page.tsx              renders the lab client-only (LabLoader) so restored state needs no hydration dance
   api/route/route.ts    server-side routing endpoint; the only place the API key is read
 components/
-  RouterLab.tsx         state: mode, input, options per mode, threshold, result, history
-  ApiKeyPanel.tsx       bring-your-own-key: masked input, never displayed, stored in this browser
+  LabLoader.tsx         client-only dynamic import of RouterLab with a skeleton
+  RouterLab.tsx         state: mode, input, context, options per mode, threshold, result, history
+  ApiKeyPanel.tsx       bring-your-own-key dialog: masked input, never displayed, stored in this browser
+  ThemeToggle.tsx       light/dark switch with transitions suppressed for the flip
   ModeToggle.tsx        Model Router / Tool Router
   OptionEditor.tsx      live-editable option list with the required option locked
   ThresholdSlider.tsx   confidence threshold
