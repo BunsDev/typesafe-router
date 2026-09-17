@@ -39,7 +39,7 @@ export const modelRouterOptions: RouteOption[] = [
   },
   {
     id: MODEL_SAFE_DEFAULT_ID,
-    label: "General model (safe default)",
+    label: "General model",
     description: "Balanced general-purpose model. Used when the request doesn't clearly fit a specialist.",
     metadata: { cost_per_1k_tokens: 0.01, avg_latency_ms: 1200, role: "fallback" },
   },

@@ -8,27 +8,24 @@ const MODES: { value: RouterMode; label: string; hint: string }[] = [
 ];
 
 export default function ModeToggle({ mode, onChange, disabled }: { mode: RouterMode; onChange: (mode: RouterMode) => void; disabled?: boolean }) {
+  const index = MODES.findIndex((m) => m.value === mode);
   return (
-    <div role="radiogroup" aria-label="Router mode" className="inline-flex rounded-md border border-line bg-panel-2 p-0.5">
-      {MODES.map((m) => {
-        const active = m.value === mode;
-        return (
-          <button
-            key={m.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            disabled={disabled}
-            onClick={() => onChange(m.value)}
-            title={m.hint}
-            className={`rounded px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${
-              active ? "bg-ink text-bg" : "text-ink-2 hover:text-ink"
-            }`}
-          >
-            {m.label}
-          </button>
-        );
-      })}
+    <div role="radiogroup" aria-label="Router mode" className="segmented" data-index={index}>
+      <span className="segmented-thumb" aria-hidden />
+      {MODES.map((m) => (
+        <button
+          key={m.value}
+          type="button"
+          role="radio"
+          aria-checked={m.value === mode}
+          disabled={disabled}
+          onClick={() => onChange(m.value)}
+          title={m.hint}
+          className="segmented-option"
+        >
+          {m.label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -34,7 +34,7 @@ The key is read only on the server, inside `app/api/route/route.ts`. It is never
 
 ### Bring your own key (safe to stream)
 
-You don't need `.env.local` to route with real Jev. The **API key** panel in the UI lets anyone paste their own TypeSafe key:
+You don't need `.env.local` to route with real Jev. Click the status pill in the header (or **Add your key** in the demo banner) to open the key dialog and paste your own TypeSafe key:
 
 - It is stored in that browser's `localStorage` only (`jev-router:api-key`). It never goes in the URL, in React state that renders, or in a log entry.
 - The input is masked, the draft is wiped the moment you hit Save, and the saved key is never read back into the UI. The only thing rendered is a yes/no "a key is saved in this browser" status. No last-four, no reveal button. Screen-share or livestream the page without worrying.
@@ -148,7 +148,8 @@ app/
   api/route/route.ts    server-side routing endpoint; the only place the API key is read
 components/
   RouterLab.tsx         state: mode, input, options per mode, threshold, result, history
-  ApiKeyPanel.tsx       bring-your-own-key: masked input, never displayed, stored in this browser
+  ApiKeyPanel.tsx       bring-your-own-key dialog: masked input, never displayed, stored in this browser
+  ThemeToggle.tsx       light/dark switch with transitions suppressed for the flip
   ModeToggle.tsx        Model Router / Tool Router
   OptionEditor.tsx      live-editable option list with the required option locked
   ThresholdSlider.tsx   confidence threshold

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ApiKeyPanel, { useHasStoredApiKey } from "@/components/ApiKeyPanel";
 import ModeToggle from "@/components/ModeToggle";
 import OptionEditor from "@/components/OptionEditor";
 import RoutingHistoryTable from "@/components/RoutingHistoryTable";
 import RoutingResult from "@/components/RoutingResult";
+import ThemeToggle from "@/components/ThemeToggle";
 import ThresholdSlider from "@/components/ThresholdSlider";
 import { apiKeyHeaders } from "@/lib/apiKeyStorage";
 import { DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/jevRouter";
@@ -31,6 +32,7 @@ const SAMPLE_INPUTS: Record<RouterMode, string[]> = {
 type LiveStatus = "unknown" | "live" | "live-user-key" | "demo";
 
 type RunState = {
+  id: number;
   mode: RouterMode;
   userInput: string;
   options: RouteOption[];
@@ -53,12 +55,14 @@ export default function RouterLab() {
   /** null = still checking. */
   const [serverHasKey, setServerHasKey] = useState<boolean | null>(null);
   const userHasKey = useHasStoredApiKey();
-  // Derived, never stored: the user's browser key wins, then the server key, else demo.
   const liveStatus: LiveStatus = serverHasKey === null ? "unknown" : userHasKey ? "live-user-key" : serverHasKey ? "live" : "demo";
+  const [keyDialogOpen, setKeyDialogOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<RunState | null>(null);
   const [history, setHistory] = useState<RoutingLogEntry[]>([]);
+  const runCounter = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const options = optionsByMode[mode];
   const requiredId = requiredOptionId(mode);
@@ -83,22 +87,28 @@ export default function RouterLab() {
     };
   }, []);
 
-  const setOptions = useCallback(
-    (next: RouteOption[]) => setOptionsByMode((prev) => ({ ...prev, [mode]: next })),
-    [mode],
-  );
+  const setOptions = useCallback((next: RouteOption[]) => setOptionsByMode((prev) => ({ ...prev, [mode]: next })), [mode]);
 
   function changeMode(next: RouterMode) {
+    if (next === mode) return;
     setMode(next);
     setError(null);
     if (!input.trim() || SAMPLE_INPUTS[mode].includes(input)) setInput(SAMPLE_INPUTS[next][0]);
+  }
+
+  function recall(entry: { mode: RouterMode; userInput: string }) {
+    setMode(entry.mode);
+    setInput(entry.userInput);
+    setError(null);
+    textareaRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    textareaRef.current?.focus();
   }
 
   async function runRouting() {
     if (!canRun) return;
     setLoading(true);
     setError(null);
-    const snapshot: Omit<RunState, "result"> = { mode, userInput: input, options: options.map((o) => ({ ...o })), threshold };
+    const snapshot = { mode, userInput: input, options: options.map((o) => ({ ...o })), threshold };
     const body: RouteApiRequest = { mode, userInput: input, options: snapshot.options, confidenceThreshold: threshold };
 
     try {
@@ -113,7 +123,8 @@ export default function RouterLab() {
         const err = payload as RouteApiError;
         throw new Error(err.error ?? `Request failed with HTTP ${response.status}.`);
       }
-      setRun({ ...snapshot, result: payload.result });
+      runCounter.current += 1;
+      setRun({ id: runCounter.current, ...snapshot, result: payload.result });
       setHistory((prev) => [payload.logEntry, ...prev].slice(0, 200));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -123,77 +134,91 @@ export default function RouterLab() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+    <div className="mx-auto max-w-6xl px-4 pb-10 pt-5 sm:px-6">
       {/* Header */}
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Jev Router Lab</h1>
-          <p className="mt-1 max-w-2xl text-sm text-ink-2">
-            Jev picks the best option from a fixed list and reports how sure it is. It never calls a tool and never generates text.{" "}
-            <span className="text-ink">Jev decides, your code executes.</span>
+      <header className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-semibold tracking-tight">Jev Router Lab</h1>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-2">
+            Jev picks the best option from a fixed list and says how sure it is. It never calls a tool and never generates text.{" "}
+            <span className="font-medium text-ink">Jev decides, your code executes.</span>
           </p>
         </div>
-        <StatusBadge status={liveStatus} />
+        <div className="flex items-center gap-2">
+          <StatusPill status={liveStatus} onClick={() => setKeyDialogOpen(true)} />
+          <ThemeToggle />
+        </div>
       </header>
 
       {liveStatus === "demo" && (
-        <div role="status" className="mb-5 rounded-md border border-warn/50 bg-warn/10 px-3 py-2 text-sm text-ink-2">
-          <span className="font-semibold text-warn">Demo mode — simulated routing, not real Jev calls.</span> No{" "}
-          <code className="font-mono text-xs">TYPESAFE_API_KEY</code> is configured, so decisions come from a local keyword matcher. Add your own key in the{" "}
-          <span className="text-ink">API key</span> panel below (stored in this browser, never displayed), or copy{" "}
-          <code className="font-mono text-xs">.env.local.example</code> to <code className="font-mono text-xs">.env.local</code>.
+        <div role="status" className="enter mb-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-warn/40 bg-warn/[0.07] px-3 py-2 text-sm">
+          <span className="text-ink-2">
+            <span className="font-medium text-warn">Demo mode — simulated routing, not real Jev calls.</span> No API key is configured, so a local keyword
+            matcher stands in for Jev.
+          </span>
+          <button type="button" className="btn h-7 px-2.5 text-xs" onClick={() => setKeyDialogOpen(true)}>
+            Add your key
+          </button>
         </div>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
-        {/* Left column: inputs */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,11fr)_minmax(0,10fr)] lg:items-start">
+        {/* Left: request + options */}
         <div className="space-y-5">
           <section className="panel">
             <div className="panel-title">
-              <span>1 · Request</span>
+              <span>
+                <span className="step">1</span>Request
+              </span>
               <ModeToggle mode={mode} onChange={changeMode} disabled={loading} />
             </div>
-            <div className="space-y-3 p-4">
-              <label className="block">
-                <span className="mb-1 block text-sm text-ink-2">User input</span>
+            <div className="space-y-4 p-4">
+              <div>
                 <textarea
-                  className="field min-h-[6rem] resize-y font-sans"
+                  ref={textareaRef}
+                  className="field min-h-[5.5rem] resize-y leading-relaxed"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={mode === "model" ? "What should the model handle?" : "What does the user want?"}
+                  placeholder={mode === "model" ? "What should a model handle?" : "What does the user want?"}
+                  aria-label="User input"
                   onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runRouting();
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      runRouting();
+                    }
                   }}
                 />
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {SAMPLE_INPUTS[mode].map((sample) => (
-                  <button
-                    key={sample}
-                    type="button"
-                    className="rounded border border-line px-2 py-0.5 text-xs text-muted hover:border-line-strong hover:text-ink"
-                    onClick={() => setInput(sample)}
-                    disabled={loading}
-                    title={sample}
-                  >
-                    {sample.length > 34 ? `${sample.slice(0, 34)}…` : sample}
-                  </button>
-                ))}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {SAMPLE_INPUTS[mode].map((sample) => (
+                    <button key={sample} type="button" className="chip" onClick={() => setInput(sample)} disabled={loading} title={sample}>
+                      <span className="truncate">{sample.length > 36 ? `${sample.slice(0, 36)}…` : sample}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
+
               <ThresholdSlider value={threshold} onChange={setThreshold} />
-              <div className="flex items-center gap-3 pt-1">
-                <button type="button" className="btn btn-primary" onClick={runRouting} disabled={!canRun}>
-                  {loading ? "Routing…" : "Run Routing Decision"}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" className="btn btn-primary min-w-[11.5rem]" onClick={runRouting} disabled={!canRun} aria-busy={loading}>
+                  {loading ? (
+                    <>
+                      <Spinner /> Routing
+                    </>
+                  ) : (
+                    "Run routing decision"
+                  )}
                 </button>
-                <span className="text-xs text-muted">⌘/Ctrl + Enter</span>
+                <kbd className="hidden rounded border border-line bg-panel-2 px-1.5 py-0.5 font-mono text-[11px] text-muted sm:inline">⌘ ↵</kbd>
+                {!hasRequired && (
+                  <span className="text-xs text-bad">
+                    Options must include <code className="font-mono">{requiredId}</code>.
+                  </span>
+                )}
               </div>
-              {!hasRequired && (
-                <p className="text-xs text-bad">
-                  The option list must include <code className="font-mono">{requiredId}</code>. The router refuses to run without a fallback option.
-                </p>
-              )}
+
               {error && (
-                <p role="alert" className="rounded-md border border-bad/50 bg-bad/10 px-3 py-2 text-sm text-bad">
+                <p role="alert" className="enter rounded-lg border border-bad/40 bg-bad/[0.07] px-3 py-2 text-sm text-bad">
                   {error}
                 </p>
               )}
@@ -202,95 +227,139 @@ export default function RouterLab() {
 
           <section className="panel">
             <div className="panel-title">
-              <span>2 · Options ({mode === "model" ? "models" : "tools"})</span>
-              <span className="normal-case tracking-normal">{options.length} options · Jev may only pick one of these ids</span>
+              <span>
+                <span className="step">2</span>Options · {mode === "model" ? "models" : "tools"}
+              </span>
+              <span className="panel-hint">Jev may only return one of these ids</span>
             </div>
             <div className="p-4">
-              <OptionEditor
-                options={options}
-                requiredId={requiredId}
-                onChange={setOptions}
-                onReset={() => setOptions(cloneOptions(mode))}
-                disabled={loading}
-              />
+              <OptionEditor options={options} requiredId={requiredId} onChange={setOptions} onReset={() => setOptions(cloneOptions(mode))} disabled={loading} />
             </div>
           </section>
-
-          <ApiKeyPanel serverHasKey={serverHasKey === true} />
         </div>
 
-        {/* Right column: result */}
-        <div className="space-y-5">
+        {/* Right: decision, sticky on desktop so it stays in view while editing options */}
+        <div className="space-y-5 lg:sticky lg:top-5">
           <section className="panel">
             <div className="panel-title">
-              <span>3 · Decision</span>
+              <span>
+                <span className="step">3</span>Decision
+              </span>
               {run && (
-                <span className="normal-case tracking-normal">
-                  {run.mode === "model" ? "model router" : "tool router"} · {run.result.source === "jev" ? "live Jev" : "simulated"}
+                <span className="panel-hint">
+                  {run.mode === "model" ? "model router" : "tool router"} ·{" "}
+                  <span className={run.result.source === "jev" ? "text-teal" : ""}>{run.result.source === "jev" ? "live Jev" : "simulated"}</span>
                 </span>
               )}
             </div>
             <div className="p-4">
               {run ? (
-                <RoutingResult mode={run.mode} userInput={run.userInput} options={run.options} result={run.result} threshold={run.threshold} />
-              ) : (
-                <div className="py-10 text-center text-sm text-muted">
-                  <p>Run a routing decision to see Jev&apos;s pick, its confidence, the full score breakdown, and what your code would execute.</p>
+                <div key={run.id} className={loading ? "stale" : ""}>
+                  <RoutingResult mode={run.mode} userInput={run.userInput} options={run.options} result={run.result} threshold={run.threshold} />
                 </div>
+              ) : (
+                <EmptyDecision loading={loading} />
               )}
-              {run && loading && <p className="mt-3 text-xs text-muted">Routing a new request…</p>}
             </div>
           </section>
 
-          <section className="panel">
-            <div className="panel-title">
+          <details className="panel group">
+            <summary className="panel-title cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
               <span>How the boundary works</span>
-            </div>
-            <ol className="list-decimal space-y-1.5 px-4 py-3 pl-8 text-sm text-ink-2">
+              <span aria-hidden className="inline-block text-sm transition-transform duration-150 group-open:rotate-90">
+                ▸
+              </span>
+            </summary>
+            <ol className="list-decimal space-y-1.5 px-4 py-3 pl-8 text-sm leading-relaxed text-ink-2">
               <li>
                 The app posts the input and the option list to <code className="font-mono text-xs">/api/route</code>.
               </li>
               <li>
-                <code className="font-mono text-xs">createRouter</code> checks that the fallback option is present, then asks Jev one{" "}
+                <code className="font-mono text-xs">createRouter</code> checks the fallback option is present, then asks Jev one{" "}
                 <code className="font-mono text-xs">choice</code> question whose options are exactly the option ids.
               </li>
-              <li>Jev returns a pick, a probability per option, and a confidence. Anything not in the list is rejected as an invalid route.</li>
-              <li>Below the threshold, the fallback policy runs: safe default (model) or ask the user (tool). The decision is logged.</li>
+              <li>Jev returns a pick, a probability per option, and a confidence. Anything outside the list is rejected.</li>
+              <li>Below the threshold the fallback policy runs: safe default (model) or ask the user (tool). Every decision is logged.</li>
               <li>
                 The library returns an option id. <span className="text-ink">Executing it is your code&apos;s job.</span> This demo only prints what it would do.
               </li>
             </ol>
-          </section>
+          </details>
         </div>
       </div>
 
       <section className="panel mt-5">
         <div className="panel-title">
-          <span>4 · Routing history</span>
+          <span>
+            <span className="step">4</span>Routing history
+          </span>
+          {history.length > 0 && <span className="panel-hint">{history.length} logged</span>}
         </div>
-        <RoutingHistoryTable entries={history} onClear={() => setHistory([])} />
+        <RoutingHistoryTable entries={history} onClear={() => setHistory([])} onRecall={recall} />
       </section>
 
-      <footer className="mt-6 text-center text-xs text-muted">
-        Built on TypeSafe&apos;s Jev. Unofficial demo. Source in <code className="font-mono">lib/</code>, UI in <code className="font-mono">components/</code>.
+      <footer className="mt-8 text-center text-xs text-muted">
+        Built on TypeSafe&apos;s Jev. Unofficial demo. Library in <code className="font-mono">lib/</code>, UI in <code className="font-mono">components/</code>.
       </footer>
+
+      <ApiKeyPanel open={keyDialogOpen} onClose={() => setKeyDialogOpen(false)} serverHasKey={serverHasKey === true} />
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: LiveStatus }) {
-  if (status === "unknown") return <span className="rounded-full border border-line px-2.5 py-1 text-xs text-muted">Checking API key…</span>;
-  if (status === "live-user-key")
+function Spinner() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <path d="M8 2a6 6 0 1 1-6 6" />
+    </svg>
+  );
+}
+
+function EmptyDecision({ loading }: { loading: boolean }) {
+  return (
+    <div className="py-8 text-center">
+      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-panel-2 text-muted" aria-hidden>
+        {loading ? (
+          <Spinner />
+        ) : (
+          <svg viewBox="0 0 16 16" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 8h4l1.5-3 3 6L12 8h2" />
+          </svg>
+        )}
+      </div>
+      <p className="text-sm text-ink-2">{loading ? "Asking Jev which option fits…" : "No decision yet."}</p>
+      <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted">
+        {loading ? "One choice question, one round trip." : "Run a request to see the pick, its confidence, every option's score, and what your code would execute."}
+      </p>
+    </div>
+  );
+}
+
+function StatusPill({ status, onClick }: { status: LiveStatus; onClick: () => void }) {
+  const base =
+    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-[transform,border-color,background-color] duration-[160ms] ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.97]";
+  if (status === "unknown") {
     return (
-      <span className="rounded-full border border-teal/50 bg-teal/10 px-2.5 py-1 text-xs text-teal">
-        ● Live · routing with Jev · your key
+      <span className={`${base} border-line text-muted`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-line-strong" /> Checking…
       </span>
     );
-  if (status === "live")
-    return (
-      <span className="rounded-full border border-teal/50 bg-teal/10 px-2.5 py-1 text-xs text-teal">
-        ● Live · routing with Jev · server key
-      </span>
-    );
-  return <span className="rounded-full border border-warn/50 bg-warn/10 px-2.5 py-1 text-xs text-warn">○ Demo mode · simulated</span>;
+  }
+  const live = status !== "demo";
+  const label = status === "live-user-key" ? "Live · your key" : status === "live" ? "Live · server key" : "Demo mode";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Manage API key"
+      className={`${base} ${live ? "border-teal/40 bg-teal/10 text-teal hover:border-teal/70" : "border-warn/40 bg-warn/10 text-warn hover:border-warn/70"}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-teal" : "bg-warn"}`} />
+      {label}
+      <svg viewBox="0 0 16 16" className="ml-0.5 h-3 w-3 opacity-70" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="6" cy="8" r="3" />
+        <path d="M9 8h5M12 8v2" />
+      </svg>
+    </button>
+  );
 }
