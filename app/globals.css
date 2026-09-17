@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/* Design tokens. Dark by default; [data-theme="light"] swaps surfaces. */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111214;
+  --dot: #1f2023;
+  --panel: #18191c;
+  --panel-2: #202226;
+  --ink: #f4f4f5;
+  --ink-2: #c9c9cc;
+  --muted: #8a8b90;
+  --line: #2c2e33;
+  --line-strong: #565961;
+  --pink: #f386a1;
+  --teal: #16b8aa;
+  --green: #22c55e;
+  --amber: #f5b72b;
+  --red: #f0564f;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fafafa;
+  --dot: #e5e5e5;
+  --panel: #ffffff;
+  --panel-2: #f2f2f3;
+  --ink: #1b1b1f;
+  --ink-2: #3c3c42;
+  --muted: #74757b;
+  --line: #dcdce0;
+  --line-strong: #1b1b1f;
+  --pink: #d94a79;
+  --teal: #0b8f84;
+  --green: #15803d;
+  --amber: #b7791f;
+  --red: #c53030;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-pink: var(--pink);
+  --color-teal: var(--teal);
+  --color-ok: var(--green);
+  --color-warn: var(--amber);
+  --color-bad: var(--red);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  color: var(--ink);
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 8px 8px;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--pink);
+  color: #1b1b1f;
+}
+
+:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: 2px;
+}
+
+input[type="range"] {
+  accent-color: var(--pink);
+}
+
+.field {
+  @apply w-full rounded-md border border-line bg-panel-2 px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:border-line-strong focus:outline-none;
+}
+
+.btn {
+  @apply inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm font-medium transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.btn-primary {
+  @apply border-pink bg-pink text-[#1b1b1f] hover:bg-pink/90 hover:border-pink;
+}
+
+.panel {
+  @apply rounded-lg border border-line bg-panel;
+}
+
+.panel-title {
+  @apply flex items-center justify-between border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
