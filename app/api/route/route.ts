@@ -14,9 +14,15 @@
  *
  * Because the endpoint is unauthenticated, every text field and the body as a
  * whole are bounded (`lib/limits.ts`), and calls that would spend the SERVER's
- * key are rate limited per caller (`ROUTE_RATE_LIMIT_PER_MINUTE`, default 60,
- * 0 disables). Calls carrying the user's own key spend the user's credits and
- * are not limited here.
+ * key are rate limited (`ROUTE_RATE_LIMIT_PER_MINUTE`, default 60, 0 disables).
+ * Calls carrying the user's own key spend the user's credits and are not
+ * limited here.
+ *
+ * The limit is per caller only when `ROUTE_TRUST_PROXY` is set, meaning a
+ * proxy in front of this app (Vercel, nginx, a load balancer) overwrites
+ * `x-forwarded-for` / `x-real-ip` with the real client address. Without it those
+ * headers are whatever the client sent, so they are ignored and every caller
+ * shares one bucket: coarser, but not spoofable.
  */
 
 import { API_KEY_HEADER } from "@/lib/apiKeyStorage";
@@ -48,10 +54,22 @@ function serverKeyLimitPerMinute(): number {
   return Number.isFinite(n) ? n : DEFAULT_SERVER_KEY_LIMIT_PER_MINUTE;
 }
 
-/** Best-effort caller identity for rate limiting: first forwarded IP, else the direct one, else a shared bucket. */
-function callerKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0].trim();
-  return (forwarded || request.headers.get("x-real-ip")?.trim() || "unknown").slice(0, 100);
+const SHARED_BUCKET = "shared";
+
+function trustProxyHeaders(): boolean {
+  const raw = process.env.ROUTE_TRUST_PROXY?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
+ * Caller identity for rate limiting. With a trusted proxy the LAST
+ * `x-forwarded-for` entry is the one that proxy appended (earlier entries are
+ * client-supplied), then `x-real-ip`. Without one, everybody shares a bucket.
+ */
+export function callerKey(request: Request): string {
+  if (!trustProxyHeaders()) return SHARED_BUCKET;
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean).at(-1);
+  return (forwarded || request.headers.get("x-real-ip")?.trim() || SHARED_BUCKET).slice(0, 100);
 }
 
 /** Strip a secret from any text that might be shown to the user. */

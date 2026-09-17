@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GET, POST, redact, serverKeyLimiter, validateBody } from "@/app/api/route/route";
+import { callerKey, GET, POST, redact, serverKeyLimiter, validateBody } from "@/app/api/route/route";
 import { API_KEY_HEADER } from "@/lib/apiKeyStorage";
 import { MAX_BODY_BYTES, MAX_CONTEXT_CHARS, MAX_OPTION_DESCRIPTION_CHARS, MAX_OPTION_ID_CHARS, MAX_OPTION_LABEL_CHARS } from "@/lib/limits";
 import { toolRouterOptions } from "@/lib/routerConfigs";
@@ -77,6 +77,7 @@ describe("POST /api/route", () => {
   it("rate limits callers that spend the server's key, but not callers with their own", async () => {
     vi.stubEnv("TYPESAFE_API_KEY", "sk-server-key-1234567890");
     vi.stubEnv("ROUTE_RATE_LIMIT_PER_MINUTE", "1");
+    vi.stubEnv("ROUTE_TRUST_PROXY", "1");
     const fetchMock = stubJev();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -97,6 +98,27 @@ describe("POST /api/route", () => {
     expect(own.status).toBe(200);
     const lastInit = fetchMock.mock.calls.at(-1)?.[1];
     expect((lastInit?.headers as Record<string, string>).Authorization).toBe("Bearer sk-user-key-1234567890");
+  });
+
+  it("ignores forwarded headers unless a trusted proxy is declared", async () => {
+    vi.stubEnv("ROUTE_TRUST_PROXY", undefined);
+    const spoofed = new Request("http://localhost/api/route", { headers: { "x-forwarded-for": "1.1.1.1", "x-real-ip": "2.2.2.2" } });
+    expect(callerKey(spoofed)).toBe("shared");
+
+    vi.stubEnv("ROUTE_TRUST_PROXY", "true");
+    // the proxy appends the real client last; earlier entries are whatever the client sent
+    expect(callerKey(new Request("http://localhost/api/route", { headers: { "x-forwarded-for": "9.9.9.9, 203.0.113.5" } }))).toBe("203.0.113.5");
+    expect(callerKey(new Request("http://localhost/api/route", { headers: { "x-real-ip": "203.0.113.6" } }))).toBe("203.0.113.6");
+    expect(callerKey(new Request("http://localhost/api/route"))).toBe("shared");
+  });
+
+  it("shares one bucket across spoofed addresses when no proxy is trusted", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "sk-server-key-1234567890");
+    vi.stubEnv("ROUTE_RATE_LIMIT_PER_MINUTE", "1");
+    vi.stubEnv("ROUTE_TRUST_PROXY", undefined);
+    vi.stubGlobal("fetch", stubJev());
+    expect((await post(good, { "x-forwarded-for": "10.0.0.1" })).status).toBe(200);
+    expect((await post(good, { "x-forwarded-for": "10.0.0.2" })).status).toBe(429);
   });
 
   it("never echoes the key in an error", async () => {
