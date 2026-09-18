@@ -1,0 +1,17 @@
+{
+  "repository": "BunsDev/typesafe-router",
+  "description": "Community TypeScript tool and model router powered by TypeSafe AI Jev, with closed-set choices, confidence thresholds, explicit fallbacks, and a Next.js demo.",
+  "topics": [
+    "typesafe-ai",
+    "jev",
+    "typescript",
+    "nextjs",
+    "tool-routing",
+    "model-routing",
+    "ai-routing",
+    "decision-models",
+    "confidence-thresholds",
+    "ai-agents"
+  ],
+  "note": "Intended GitHub About metadata. This file does not apply repository settings automatically."
+}

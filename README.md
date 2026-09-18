@@ -1,47 +1,50 @@
 # Jev Tool & Model Router
 
-A small TypeScript library plus a Next.js demo that uses [TypeSafe's Jev](https://typesafe.ai) as a **decision layer**: given a request and a fixed list of options, Jev says which option fits best and how confident it is. Your code then executes that choice.
+A TypeScript routing library and interactive Next.js demo that use **TypeSafe AI's Jev** to select from a fixed set of tools or models, then apply explicit confidence and fallback policies.
+
+**Jev selects. Your application authorizes and executes.** This is an independent community project under `BunsDev`, not an official TypeSafe SDK or a production authorization system. The root package is private; the library is source in this repository, not a published npm install.
+
+[Contributing](CONTRIBUTING.md) · [Agent guide](AGENTS.md) · [TypeSafe API reference](https://docs.typesafe.ai/api)
 
 ```text
-request + options ──▶ Jev (one "choice" question) ──▶ option id + confidence ──▶ YOUR executor
-                        scores a closed set                 never free text        calls the model / runs the tool
+request + allowed options -> Jev choice -> validation + fallback -> effective option
+                                                                     |
+                                               your authorization and executor
 ```
 
-## What Jev does and doesn't do
+## What it does
 
-**Jev does not call tools and does not generate text.** It takes a piece of text plus typed questions and returns structured answers: for a `choice` question, one of the option keys you supplied, a probability for every key, and a confidence score. That is the entire contract.
+The model and tool routers share one engine, `createRouter` in `lib/jevRouter.ts`. Each call asks one `choice` question using the supplied option ids as the closed set. The result retains Jev's original pick, its scores, the effective option after policy, and the fallback reason.
 
-This router leans on that deliberately:
+The library **does not execute tools or invoke the selected downstream model**. It does make a Jev API call when using the live transport. The UI's execution display is illustrative, not evidence that an external action ran. A structurally valid choice can still be the wrong decision.
 
-- The only thing Jev is asked is one `choice` question whose options are exactly the `id`s in your `RouteOption[]`.
-- The only thing the router hands back is one of those ids (or, for the tool router, an explicit "ask the user" action). It never surfaces free text from Jev as a route. An answer outside the list is rejected as an integrity failure and turned into a fallback.
-- The library never executes anything. It does not know what `web_search` or `reasoning_model` mean at runtime. Wiring the returned id to a real API key, model call, or tool invocation is the integration point for whoever adopts it.
+## Run locally
 
-## Run the demo
+Use npm and the committed `package-lock.json`; do not generate a competing pnpm, Yarn, or Bun lockfile. Use a Node.js version supported by the installed Next.js dependency; Node.js 22+ is a practical development baseline. This repository currently has no root `engines` or `packageManager` pin.
 
 ```sh
-npm install
-cp .env.local.example .env.local   # optional: add TYPESAFE_API_KEY to route with real Jev
+git clone https://github.com/BunsDev/typesafe-router.git
+cd typesafe-router
+npm ci
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open the address printed by Next.js, normally `http://localhost:3000`. With no configured key, the demo uses the local keyword-based `mockCallJev` transport. Mock and live results are labeled separately.
 
-- **With a key** the header shows *Live · routing with Jev* and every decision is a real call to `POST https://api.typesafe.ai/v1/systemone`.
-- **Without a key** the app runs in **demo mode**, clearly labeled *Demo mode — simulated routing, not real Jev calls*. A local keyword matcher (`lib/mockRouter.ts`) stands in for Jev so you can exercise the UI, the fallback logic, and the log without an account. It goes through the exact same engine, only the transport differs.
+For live routing, get a key from the [TypeSafe console](https://console.typesafe.ai), then optionally configure the server:
 
-The key is read only on the server, inside `app/api/route/route.ts`. It is never sent to the browser.
+```sh
+cp .env.local.example .env.local
+# Edit .env.local and set TYPESAFE_API_KEY, then restart the dev server.
+```
 
-### Bring your own key (safe to stream)
+The browser calls this app's `/api/route` endpoint. The server forwards live evaluations to `POST https://api.typesafe.ai/v1/systemone` using `jev-latest`. Jev answers typed questions; it does not generate the code that executes a route.
 
-You don't need `.env.local` to route with real Jev. Click the status pill in the header (or **Add your key** in the demo banner) to open the key dialog and paste your own TypeSafe key:
+### Bring your own key and privacy
 
-- It is stored in that browser's `localStorage` only (`jev-router:api-key`). It never goes in the URL, in React state that renders, or in a log entry.
-- The input is masked, the draft is wiped the moment you hit Save, and the saved key is never read back into the UI. The only thing rendered is a yes/no "a key is saved in this browser" status. No last-four, no reveal button. Screen-share or livestream the page without worrying.
-- On each routing call the browser sends it as the `x-typesafe-api-key` header to this app's own `/api/route`, which forwards it to TypeSafe. The server never logs it, and every error message is passed through a redaction step so a key can't be echoed back.
-- Precedence: browser key → `TYPESAFE_API_KEY` on the server → demo mode. **Remove key** clears it.
+The key dialog also accepts a personal key. Precedence is **browser key → server environment key → demo mode**.
 
-If you deploy this publicly, note that a browser key is sent to *your* server on every call. That is how the key stays out of the browser's network exposure to third parties, but it means users are trusting your deployment. Say so on the page if that matters for your audience.
+A browser key persists, unencrypted by the app, in `localStorage` under `jev-router:api-key`. It is sent in the `x-typesafe-api-key` header to this application's server, which forwards it to TypeSafe. Masking the field reduces accidental screen exposure; it does not protect against scripts running on the origin, access to the browser profile, developer tools, or an untrusted deployment. Use a deployment you trust and remove the key on shared machines.
 
 ### Limits on a public deployment
 
@@ -54,97 +57,105 @@ Calls that would spend the **server's** key are also rate limited: `ROUTE_RATE_L
 Edited options, the threshold, and the routing history are saved in your browser (`localStorage`, key `jev-router:lab`) so a refresh doesn't lose them. **Reset everything** in the footer removes the stored copy; nothing is written back until you change something again. **Export JSON** in the history panel downloads the full log, one `RoutingLogEntry` per decision, for review or tuning. The API key is stored separately and is never part of this blob. Whatever is read back is validated field by field, and a malformed entry is dropped rather than rendered.
 
 Selecting a request in the history table (click the row, or Tab to it and press Enter) loads its mode, input, conversation context and threshold back into the request panel. The options are whatever the editor holds at that moment (only their ids are logged), so a re-run is a fresh decision, not a replay. Resetting the lab discards any routing call still in flight; clearing the history while a call is running keeps that decision on screen but doesn't re-add it to the log.
+The server environment key is not sent to the browser. Do not commit `.env.local`, embed a key in a component or URL, or use a `NEXT_PUBLIC_` credential. A public server key can spend the owner's credits on visitors' requests; add appropriate access controls, request limits, and provider-side spending limits before offering one publicly. These deployment controls are not provided by the routing decision itself.
 
-The **Conversation context** field under the input is the `context` half of `RouteRequest`: recent turns that should influence the pick. Try "Is it free?" on its own and then with a prior turn about Thursday afternoon.
+## Routing policies
+
+| Case | Model router | Tool router |
+| --- | --- | --- |
+| Example options | `fast_cheap_model`, `reasoning_model`, `code_model`, `general_model` | `web_search`, `calculator`, `calendar_lookup`, `no_tool_needed` |
+| Required option | `general_model` | `no_tool_needed` |
+| Below confidence threshold | Use configured `safe_default` | Return `needs_clarification`; `effectiveOptionId` is `null` |
+| Unusable or out-of-list answer | Same configured fallback, reason `invalid_option` | Same configured fallback, reason `invalid_option` |
+| Invalid configuration | Throw `RouterConfigError` before calling Jev | Throw `RouterConfigError` before calling Jev |
+| Transport/provider error | Reject the call; do not turn failure into a successful route | Reject the call; do not turn failure into a successful route |
 
 Other scripts: `npm test` (vitest, 71 tests covering the engine, the wire format, the simulator, storage, the rate limiter, and the API route), `npm run e2e` (Playwright: builds and serves the app in demo mode, then drives the lab and the API through a real browser: recall, persistence, Clear and Reset during a run, the option editor, fallbacks, limits; `--ui` opens Playwright's inspector), `npm run typecheck` (runs `next typegen` first so a clean checkout has the generated `next-env.d.ts`, which is gitignored as Next.js recommends), `npm run lint`, `npm run build`.
+The default threshold is `0.75`, with per-router and per-call overrides. `safe_default` is the policy name, **not a guarantee of harmless execution**. A downstream model call may expose data, cost money, or violate an application's policy. The integrating application must validate the selected id against a trusted registry and independently enforce permissions, privacy, budgets, and approval requirements.
 
-## The two routers
+`no_tool_needed` is an explicit no-action option, not a tool to invoke. Preserve it when editing the tool list. For clarification, ask the user rather than executing Jev's original low-confidence selection.
 
-Both are the same engine (`createRouter` in `lib/jevRouter.ts`) with different configs (`lib/routerConfigs.ts`).
+## Use the library
 
-| | Model router | Tool router |
-| --- | --- | --- |
-| Question | Which LLM / API key should handle this? | Which tool is relevant, if any? |
-| Options | `fast_cheap_model`, `reasoning_model`, `code_model`, `general_model` | `web_search`, `calculator`, `calendar_lookup`, `no_tool_needed` |
-| Required option | `general_model` (the safe default) | `no_tool_needed` (so Jev is never forced to pick a tool) |
-| Below threshold | Route to `general_model` and log it | Return `needs_clarification`; nothing is executed |
-
-## Using the library
+This example runs inside this repository and uses the mock transport, so it does not consume API credits:
 
 ```ts
-import { createRouter, modelRouterConfig, modelRouterOptions } from "@/lib";
+import { createRouter } from "@/lib/jevRouter";
+import { modelRouterConfig, modelRouterOptions } from "@/lib/routerConfigs";
+import { mockCallJev } from "@/lib/mockRouter";
 
-const modelRouter = createRouter(modelRouterConfig);
-
-const { result, logEntry } = await modelRouter.route({
-  userInput: "Fix this TypeScript bug: const x: number = 'a'",
-  context: "…recent conversation, optional…",
+const router = createRouter(modelRouterConfig, mockCallJev, "mock");
+const userInput = "Help me debug a TypeScript type error.";
+const { result, logEntry } = await router.route({
+  userInput,
+  context: "The request concerns a local development project.",
   options: modelRouterOptions,
 });
 
-// result.decision        → { selectedOptionId, confidence, allOptionScores, fallbackUsed }
-// result.action          → { kind: "none" } | { kind: "safe_default", optionId } | { kind: "needs_clarification", prompt }
-// result.effectiveOptionId → the id your code should act on, or null when the action is needs_clarification
-
-// ---- the boundary: everything below is YOUR code, not the library's ----
-if (result.effectiveOptionId) {
-  await callModel(result.effectiveOptionId, userInput);   // your executor
-} else if (result.action.kind === "needs_clarification") {
-  await reply(result.action.prompt);                       // ask, don't guess
-}
+console.log(result.effectiveOptionId, result.action, logEntry.source);
+// This example deliberately does not execute the returned option.
 ```
 
-The lower-level pieces are exported too:
+For live server-side use, supply the real transport instead of the mock and configure credentials securely. Do not move a provider credential into client-side imports merely to reuse this example.
+
+### Core API
 
 - `routeWithJev(request, threshold?, transport?)` → a raw `RouteDecision` with Jev's pick and `fallbackUsed` set, no policy applied. Throws `RouteIntegrityError` if Jev's answer isn't in the option list, isn't a `choice` answer, or is missing. A valid pick that arrives without a confidence (and without probabilities) is kept at confidence 0, so it takes the ordinary low-confidence path rather than being reported as invalid.
 - `resolveFallback(decision, options, policy, source)` → applies a `FallbackPolicy` to a decision. Pure, no I/O.
 - `assertFallbackOption(options, policy)` → the runtime check described below.
 - `buildRouterContext(request)` / `buildJevRequest(request)` → the exact text and question sent to Jev, so you can inspect or test it.
 - `callJev(request, apiKey?)` → the low-level client. `mockCallJev` has the same signature for demo mode; tests inject their own.
+- `createRouter(config, transport?, source?)` validates requests, calls the transport, applies policy, and logs the result.
+- `routeWithJev(request, threshold?, transport?)` returns the raw decision and throws `RouteIntegrityError` for an unusable or out-of-set answer. It does not apply the full router fallback policy.
+- `resolveFallback(decision, options, policy, source)` applies the deterministic policy without network I/O.
+- `assertFallbackOption(options, policy)` checks the required fallback/no-tool option.
+- `buildRouterContext(request)` and `buildJevRequest(request)` expose what will be submitted.
 
-## Core types
+Public re-exports live in `lib/index.ts`; full types live in `types/router.ts`.
 
 ```ts
-type RouteOption = { id: string; label: string; description: string; metadata?: Record<string, string | number> };
+type RouteOption = {
+  id: string;
+  label: string;
+  description: string;
+  metadata?: Record<string, string | number>;
+};
 type RouteRequest = { userInput: string; context?: string; options: RouteOption[] };
-type RouteDecision = { selectedOptionId: string; confidence: number; allOptionScores: Record<string, number>; fallbackUsed: boolean };
 ```
 
-`description` is what Jev reads to score an option, so write it as "use this when…". `metadata` is never sent to Jev; it's for your executor (cost, latency, which API key, whatever you need). Full types are in `types/router.ts`.
+Use stable, unique ids and at least two options. Write descriptions as “use this when…” guidance. The option `metadata` is for the integrating application and is not sent to Jev. Keep the policy's required option in every request. Add a new router with an explicit `mode`, threshold, and `safe_default` or `needs_clarification` policy.
 
-## Adding options
+## Saved state, logs, and tuning
 
-Append to `modelRouterOptions` or `toolRouterOptions` in `lib/routerConfigs.ts`, or build your own list at call time; the option list is a plain array passed with every request. Two rules:
+The lab stores edited options, thresholds, and history in `localStorage` under `jev-router:lab`. Reset clears the lab state; remove the API key separately. Exported JSON contains routing history, not the separately stored key. Inputs and conversation context can nevertheless contain private information: inspect exports before sharing.
 
 1. Every `id` must be unique. It is the only value Jev can return, so make it stable. Ids are used as object keys in the wire format and the score maps, and the library builds and reads those maps so that awkward ids such as `constructor` or `__proto__` behave like any other.
 2. The list must still contain the option the fallback policy requires (`general_model` for the model router, `no_tool_needed` for the tool router). Otherwise `createRouter(...).route()` throws a `RouterConfigError` **before** calling Jev:
+Logs record the input/context, considered options, original and effective selections, confidence, threshold, scores, fallback action, source (`jev` or `mock`), and duration. The default console logger prints a shortened input excerpt. For sensitive integrations, supply an appropriate logger and retention policy; do not assume prompts are automatically redacted. Mock confidence and routing outcomes are demonstrations, not model-quality measurements.
 
-   ```text
-   Option list is missing the required no-tool escape hatch option "no_tool_needed".
-   Every option list passed to the router must include it so a low-confidence
-   decision can never be silently misrouted. Options present: [web_search, calculator, calendar_lookup].
-   ```
+## Project map
 
-To make a third router, call `createRouter` with your own `RouterConfig`: a `mode`, a `confidenceThreshold`, and a `fallback` policy that is either `{ kind: "safe_default", optionId }` or `{ kind: "needs_clarification", requiredOptionId, clarificationPrompt? }`.
+| Path | Responsibility |
+| --- | --- |
+| `lib/jevRouter.ts` | Validation, request construction, policy, and logging. |
+| `lib/jevClient.ts` | TypeSafe wire format, response normalization, and provider errors. |
+| `lib/routerConfigs.ts` | Example model/tool options and fallback policies. |
+| `lib/mockRouter.ts` | Local simulated transport. |
+| `lib/apiKeyStorage.ts`, `lib/labStorage.ts` | Separate browser key and lab-state storage. |
+| `types/router.ts` | Public routing contracts. |
+| `app/api/route/route.ts` | Same-origin server endpoint and credential handling. |
+| `components/RouterLab.tsx` | Interactive lab, options, threshold, and history. |
 
-In the demo UI you can add, edit, and remove options live. The required option's row is locked against deletion and the Run button explains why if the list is invalid.
+## Development checks
 
-## Confidence threshold and fallback: why they exist
+```sh
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
 
-A classifier that always returns *something* will happily return its least-bad guess at 0.31 confidence. Acting on that means calling the wrong tool or paying for the wrong model, silently. The threshold (default `0.75`, adjustable per router, per call, and with the slider in the demo) is the line below which the router refuses to trust the top pick.
-
-What happens below the line depends on what's safe for that router:
-
-- **Model router → safe default.** Sending a request to a balanced general model is never harmful, only possibly suboptimal, so a low-confidence pick is replaced with `general_model`. The original pick and its scores are still in the decision and the log for tuning.
-- **Tool router → ask the user.** Calling the wrong tool can have side effects (a search that leaks a query, a calendar write, a wasted API call). There is no safe tool to default to, so the router returns `needs_clarification` with a prompt and **no option to execute**. `effectiveOptionId` is `null` on purpose.
-- **Invalid answer → same fallback, different reason.** If Jev returns an id that isn't in the list, or no usable answer, the router does not guess. It applies the same policy with `reason: "invalid_option"`.
-
-`no_tool_needed` is required in the tool router's list for a related reason: without it, Jev is forced to pick a tool even when none applies, and a confident-looking "web_search" for "write me a poem" is exactly the kind of misroute this exists to prevent.
-
-Every call produces one `RoutingLogEntry` with the input, the options considered, Jev's pick, the effective option, confidence, threshold, all scores, whether fallback was used and which action ran, the source (`jev` or `mock`), and timing. The default logger prints to the console; pass your own `logger` in the config to ship them wherever you review routing quality. The demo shows the same entries in its history table.
-
-## Project layout
+Use mock/injected transports for automated checks. For UI changes, also exercise both router modes, required-option deletion protection, invalid options, low-confidence clarification, key removal, persistence, exports, themes, and narrow screens. Report actual test results rather than keeping a hardcoded test count in this README.
 
 ```text
 e2e/
@@ -205,5 +216,8 @@ The request line is JSON-encoded, so quotes and newlines inside the user's text 
 }
 // → { "answers": { "router.select_option": { "type": "choice", "choice": "web_search", "probabilities": {…}, "confidence": 0.91 } } }
 ```
+## Related community projects
 
-This is an independent community project, not an official TypeSafe product.
+[TypeSafe AI Playground](https://github.com/BunsDev/typesafe-ai-playground) explores Jev use cases; [Clarity Judge](https://github.com/BunsDev/clarity-judge) applies named writing checks; [TypeSafe UI](https://github.com/BunsDev/typesafe-ui) provides interface components. They are separate projects, not automatically integrated dependencies.
+
+The proposed GitHub About description and topics are recorded in [repository-metadata.json](repository-metadata.json). Editing that file does not apply GitHub settings automatically.
