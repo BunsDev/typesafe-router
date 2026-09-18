@@ -17,6 +17,7 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run e2e   # Playwright, builds and serves the app in demo mode
 ```
 
 Automated tests should not need a real API key. For UI changes, exercise model/tool modes, option validation, threshold changes, fallback visibility, key removal, storage/export behavior, keyboard controls, themes, and narrow screens.

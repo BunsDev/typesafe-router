@@ -32,6 +32,7 @@ import type {
   RoutingLogEntry,
   RoutingLogger,
 } from "@/types/router";
+import { readOwn } from "@/lib/guards";
 import { callJev, type JevChoiceAnswer, type JevRequest, type JevTransport } from "@/lib/jevClient";
 
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.75;
@@ -113,18 +114,29 @@ export function assertValidRequest(request: RouteRequest): void {
 // Context + question construction
 // ---------------------------------------------------------------------------
 
+/** Collapse line breaks so a field can't start a new section of the state text. */
+function singleLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+}
+
+/**
+ * The "state" text Jev evaluates. The request is JSON-encoded on its line, so
+ * quotes, backslashes and newlines inside the user's text are escaped, and
+ * each option is forced onto one line, so neither can be confused with the
+ * sections that follow. The conversation context comes last, unencoded, so
+ * Jev reads it as written.
+ */
 export function buildRouterContext(request: RouteRequest): string {
-  const optionsDescription = request.options.map((o) => `- ${o.id}: ${o.label} — ${o.description}`).join("\n");
+  const optionsDescription = request.options.map((o) => `- ${singleLine(o.id)}: ${singleLine(o.label)} — ${singleLine(o.description)}`).join("\n");
   const context = request.context?.trim();
   return (
-    `Request: "${request.userInput}"\n\nOptions:\n${optionsDescription}` +
+    `Request: ${JSON.stringify(request.userInput)}\n\nOptions:\n${optionsDescription}` +
     (context ? `\n\nConversation context:\n${context}` : "")
   );
 }
 
 export function buildRouterQuestion(request: RouteRequest) {
-  const optionDescriptions: Record<string, string> = {};
-  for (const o of request.options) optionDescriptions[o.id] = `${o.label} — ${o.description}`;
+  const optionDescriptions: Record<string, string> = Object.fromEntries(request.options.map((o) => [o.id, `${o.label} — ${o.description}`]));
   return {
     type: "choice" as const,
     id: ROUTER_QUESTION_ID,
@@ -145,9 +157,7 @@ export function buildJevRequest(request: RouteRequest): JevRequest {
 
 /** Scores for every option id in the request; ids Jev did not score get 0. */
 function completeScores(options: RouteOption[], probabilities: Record<string, number> | undefined): Record<string, number> {
-  const scores: Record<string, number> = {};
-  for (const o of options) scores[o.id] = probabilities?.[o.id] ?? 0;
-  return scores;
+  return Object.fromEntries(options.map((o) => [o.id, readOwn(probabilities, o.id) ?? 0]));
 }
 
 /**

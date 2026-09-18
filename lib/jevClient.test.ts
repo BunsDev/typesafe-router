@@ -7,6 +7,18 @@ const request: JevRequest = {
 };
 
 describe("toWireRequest", () => {
+  it("keeps prototype-named option ids in the closed set", () => {
+    const wire = toWireRequest(
+      { context: "x", questions: [{ type: "choice", id: "q", question: "Which?", options: ["__proto__", "constructor", "b"], optionDescriptions: { b: "B" } }] },
+      "jev-latest",
+    );
+    const criteria = wire.questions.q.criteria;
+    expect(Object.keys(criteria)).toEqual(["__proto__", "constructor", "b"]);
+    expect(Object.hasOwn(criteria, "__proto__")).toBe(true);
+    expect(criteria.constructor).toBe("constructor");
+    expect(JSON.parse(JSON.stringify(wire)).questions.q.criteria.b).toBe("B");
+  });
+
   it("converts to TypeSafe's keyed-map format with criteria per option", () => {
     const wire = toWireRequest(request, "jev-latest");
     expect(wire).toEqual({
@@ -40,6 +52,32 @@ describe("normalizeAnswers", () => {
   it("flags a missing answer", () => {
     const [answer] = normalizeAnswers(request, { answers: {} });
     expect(answer.needsReview).toBe(true);
+    expect(answer.confidence).toBe(0);
+  });
+
+  it("flags an answer that says it is not a choice, even when the value looks valid", () => {
+    const [answer] = normalizeAnswers(request, { answers: { q: { type: "text", choice: "a", confidence: 0.9 } } });
+    expect(answer.value).toBe("");
+    expect(answer.needsReview).toBe(true);
+  });
+
+  it("accepts a null or differently-cased choice type", () => {
+    expect(normalizeAnswers(request, { answers: { q: { type: null, choice: "a", confidence: 0.9 } } })[0].needsReview).toBe(false);
+    expect(normalizeAnswers(request, { answers: { q: { type: "Choice", choice: "a", confidence: 0.9 } } })[0].needsReview).toBe(false);
+  });
+
+  it("keeps a valid pick with no confidence information, at zero confidence", () => {
+    const [answer] = normalizeAnswers(request, { answers: { q: { choice: "a" } } });
+    expect(answer).toEqual({ id: "q", type: "choice", value: "a", optionProbabilities: undefined, confidence: 0, needsReview: false });
+  });
+
+  it("never reads probabilities or answers off Object.prototype", () => {
+    const req: JevRequest = { context: "x", questions: [{ type: "choice", id: "constructor", question: "?", options: ["constructor", "b"] }] };
+    // no `constructor` answer key: must not pick up Object's constructor function
+    expect(normalizeAnswers(req, { answers: {} })[0].needsReview).toBe(true);
+    const [answer] = normalizeAnswers(req, { answers: { constructor: { choice: "constructor", probabilities: { b: 0.4 } } } });
+    expect(answer.value).toBe("constructor");
+    expect(answer.optionProbabilities).toEqual({ b: 0.4 });
     expect(answer.confidence).toBe(0);
   });
 });

@@ -42,6 +42,7 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run e2e   # Playwright, builds and serves the app in demo mode
 ```
 
 Use injected/mock transports in tests; do not consume shared API credits. Relevant regression cases include invalid ids, missing fallback options, duplicate ids, threshold boundaries, null clarification routes, provider failures, wire-format normalization, and storage/export separation. For UI changes, check both modes, option editing, key lifecycle, history, themes, keyboard use, and narrow layouts.
