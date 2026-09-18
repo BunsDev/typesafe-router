@@ -9,11 +9,19 @@
  * counters, so treat it as a brake on casual abuse, not a hard global quota.
  * Put a gateway limiter in front of a public deployment if that matters.
  *
- * Memory is bounded: at most `MAX_TRACKED_KEYS` callers are tracked. Idle keys
- * are dropped first; if a flood of distinct keys still exceeds the cap, the
- * least recently seen keys are evicted (and get a fresh budget if they return).
- * The sweep runs at most once per second so a flood can't turn every request
- * into a full scan.
+ * Memory is hard-bounded at `MAX_TRACKED_KEYS` entries, each holding at most
+ * `limit` timestamps. The cap is enforced on every insertion, so a burst of
+ * distinct keys inside one millisecond cannot grow the map. Map iteration order
+ * is kept as "least recently seen first" — every hit re-inserts its key,
+ * whether it was allowed or refused — so eviction takes the callers that have
+ * been quiet longest, and a caller that keeps retrying while throttled cannot
+ * age into the eviction window and come back with a fresh budget. A full scan
+ * for keys that went idle is cheaper than it is useful, so it runs at most once
+ * per second and the O(1) eviction below is what actually holds the line.
+ *
+ * An evicted caller does start over. That is the honest cost of a bounded map:
+ * the alternative is unbounded memory. It takes more than `MAX_TRACKED_KEYS`
+ * distinct, more-recently-seen callers in one window to displace an active one.
  */
 
 export type RateLimiter = {
@@ -22,7 +30,7 @@ export type RateLimiter = {
    * window. A `limit` of 0 or less disables limiting.
    */
   allow(key: string, limit: number, now?: number): boolean;
-  /** Number of callers currently tracked. */
+  /** Number of callers currently tracked. Never above `MAX_TRACKED_KEYS`. */
   size(): number;
   reset(): void;
 };
@@ -31,19 +39,34 @@ export const MAX_TRACKED_KEYS = 10_000;
 const SWEEP_INTERVAL_MS = 1_000;
 
 export function createRateLimiter(windowMs: number): RateLimiter {
-  // Insertion order doubles as recency: a key is re-inserted on every allowed hit.
+  // Insertion order doubles as recency: a key is re-inserted on every hit.
   const hits = new Map<string, number[]>();
   let lastSweep = Number.NEGATIVE_INFINITY;
 
-  function sweep(cutoff: number) {
+  /** Drop keys with no hits left inside the window. O(n), so it is rate limited itself. */
+  function pruneIdle(cutoff: number) {
     for (const [key, times] of hits) {
       if (!times.some((t) => t > cutoff)) hits.delete(key);
     }
-    let excess = hits.size - MAX_TRACKED_KEYS;
-    if (excess <= 0) return;
-    for (const key of hits.keys()) {
-      hits.delete(key);
-      if (--excess <= 0) break;
+  }
+
+  /** Re-insert so this key becomes the most recently seen. */
+  function touch(key: string, times: number[]) {
+    hits.delete(key);
+    hits.set(key, times);
+  }
+
+  function enforceCap(now: number, cutoff: number) {
+    if (hits.size <= MAX_TRACKED_KEYS) return;
+    if (now - lastSweep >= SWEEP_INTERVAL_MS) {
+      lastSweep = now;
+      pruneIdle(cutoff);
+    }
+    // Whatever the sweep left behind, the cap holds: drop the least recently seen.
+    while (hits.size > MAX_TRACKED_KEYS) {
+      const oldest = hits.keys().next().value;
+      if (oldest === undefined) break;
+      hits.delete(oldest);
     }
   }
 
@@ -52,17 +75,16 @@ export function createRateLimiter(windowMs: number): RateLimiter {
       if (!(limit > 0)) return true;
       const cutoff = now - windowMs;
       const recent = (hits.get(key) ?? []).filter((t) => t > cutoff);
+
       if (recent.length >= limit) {
-        hits.set(key, recent);
+        // Refused, but still seen: keep its place at the back of the eviction queue.
+        touch(key, recent);
         return false;
       }
+
       recent.push(now);
-      hits.delete(key);
-      hits.set(key, recent);
-      if (hits.size > MAX_TRACKED_KEYS && now - lastSweep >= SWEEP_INTERVAL_MS) {
-        lastSweep = now;
-        sweep(cutoff);
-      }
+      touch(key, recent);
+      enforceCap(now, cutoff);
       return true;
     },
     size() {

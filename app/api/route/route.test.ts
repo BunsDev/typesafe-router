@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callerKey, GET, POST, redact, serverKeyLimiter, validateBody } from "@/app/api/route/route";
+import { callerKey, GET, POST, readBoundedBody, redact, serverKeyLimiter, validateBody } from "@/app/api/route/route";
 import { API_KEY_HEADER } from "@/lib/apiKeyStorage";
 import { MAX_BODY_BYTES, MAX_CONTEXT_CHARS, MAX_OPTION_DESCRIPTION_CHARS, MAX_OPTION_ID_CHARS, MAX_OPTION_LABEL_CHARS } from "@/lib/limits";
 import { toolRouterOptions } from "@/lib/routerConfigs";
@@ -9,6 +9,28 @@ const good = { mode: "tool", userInput: "What is 2 + 2?", options: toolRouterOpt
 function post(body: unknown, headers: Record<string, string> = {}): Promise<Response> {
   const text = typeof body === "string" ? body : JSON.stringify(body);
   return POST(new Request("http://localhost/api/route", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: text }));
+}
+
+/**
+ * A POST whose body arrives in chunks, like a chunked upload. `pulls()` reports
+ * how many chunks the handler actually pulled, so a test can show it stopped early.
+ */
+function streamingPost(chunkCount: number, chunkBytes: number, headers: Record<string, string> = {}) {
+  let pulled = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= chunkCount) return controller.close();
+      pulled += 1;
+      controller.enqueue(new Uint8Array(chunkBytes).fill(0x78)); // "x"
+    },
+  });
+  const request = new Request("http://localhost/api/route", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: stream,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  return { request, pulls: () => pulled };
 }
 
 /** A fake TypeSafe endpoint so the live path can be exercised without a network or a real key. */
@@ -72,6 +94,46 @@ describe("POST /api/route", () => {
     const actual = await post({ ...good, context: "x".repeat(MAX_BODY_BYTES) });
     expect(actual.status).toBe(413);
     expect((await actual.json()).code).toBe("validation");
+  });
+
+  it("stops reading a chunked body as soon as it passes the cap", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", undefined);
+    const chunk = 64 * 1024;
+    const offered = 64; // 4 MB on offer, with no content-length to declare it
+    const { request, pulls } = streamingPost(offered, chunk);
+    const response = await POST(request);
+    expect(response.status).toBe(413);
+    // 256 KB is four chunks, so the read stops at five; it must not drain all 64
+    expect(pulls()).toBeLessThanOrEqual(6);
+    expect(pulls()).toBeLessThan(offered);
+  });
+
+  it("does not trust an understated content-length", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", undefined);
+    const { request } = streamingPost(8, 64 * 1024, { "content-length": "10" });
+    expect((await POST(request)).status).toBe(413);
+  });
+
+  it("reports an unreadable body as a bad request, not a size failure", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error("connection reset"));
+      },
+    });
+    const request = new Request("http://localhost/api/route", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await POST(request);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/could not be read/);
+  });
+
+  it("treats a body-less POST as invalid JSON", async () => {
+    const read = await readBoundedBody(new Request("http://localhost/api/route", { method: "POST" }), 1024);
+    expect(read).toEqual({ ok: true, text: "" });
   });
 
   it("rate limits callers that spend the server's key, but not callers with their own", async () => {

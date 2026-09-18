@@ -72,6 +72,50 @@ export function callerKey(request: Request): string {
   return (forwarded || request.headers.get("x-real-ip")?.trim() || SHARED_BUCKET).slice(0, 100);
 }
 
+export type BodyRead = { ok: true; text: string } | { ok: false; reason: "too_large" | "unreadable" };
+
+/**
+ * Read the body with a running byte count, cancelling the stream as soon as it
+ * passes `maxBytes`. `content-length` is only a fast path: it is absent on a
+ * chunked request and can understate the real size, so the bound has to be
+ * enforced while reading rather than after buffering the whole upload.
+ */
+export async function readBoundedBody(request: Request, maxBytes: number): Promise<BodyRead> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: "too_large" };
+
+  const stream = request.body;
+  if (!stream) return { ok: true, text: "" };
+
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    await reader.cancel().catch(() => {});
+    return { ok: false, reason: "unreadable" };
+  }
+
+  const buffer = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, text: new TextDecoder().decode(buffer) };
+}
+
 /** Strip a secret from any text that might be shown to the user. */
 export function redact(text: string, secret: string | undefined): string {
   if (!secret || secret.length < 8) return text;
@@ -115,15 +159,16 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const tooLarge = `Request body is too large (max ${Math.round(MAX_BODY_BYTES / 1024)} KB).`;
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return fail(tooLarge, "validation", 413);
+  const read = await readBoundedBody(request, MAX_BODY_BYTES);
+  if (!read.ok) {
+    return read.reason === "too_large"
+      ? fail(`Request body is too large (max ${Math.round(MAX_BODY_BYTES / 1024)} KB).`, "validation", 413)
+      : fail("Request body could not be read.", "validation", 400);
+  }
 
   let body: unknown;
   try {
-    const text = await request.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return fail(tooLarge, "validation", 413);
-    body = JSON.parse(text);
+    body = JSON.parse(read.text);
   } catch {
     return fail("Request body was not valid JSON.", "validation", 400);
   }
