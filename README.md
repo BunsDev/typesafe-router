@@ -38,6 +38,31 @@ cp .env.local.example .env.local
 # Edit .env.local and set TYPESAFE_API_KEY, then restart the dev server.
 ```
 
+### 1Password-backed key (recommended)
+
+Keep the key in 1Password and run the app through `op run`, so no secret ever
+lands in a file:
+
+```bash
+npm run dev:op
+```
+
+`.env.1password` is committed and holds a **reference**, not a secret:
+`TYPESAFE_API_KEY="op://Development/Jev API Key/password"`. `op run` expands it
+into the process environment at launch. Requires 1Password CLI 2.x, unlocked
+(desktop-app integration or `op signin`).
+
+Verify it took effect — `live` reports whether the SERVER has a key:
+
+```bash
+curl -s http://localhost:3000/api/route
+# {"live":true}   ({"live":false} means demo mode)
+```
+
+A shell-provided variable is not overridden by `.env.local` (`@next/env`'s
+`processEnv` only fills keys absent from the initial environment), so this path
+wins over any stale key left in `.env.local`.
+
 The browser calls this app's `/api/route` endpoint. The server forwards live evaluations to `POST https://api.typesafe.ai/v1/systemone` using `jev-latest`. Jev answers typed questions; it does not generate the code that executes a route.
 
 ### Bring your own key and privacy
